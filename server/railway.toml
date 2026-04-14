@@ -2,13 +2,10 @@
 # Set "Root Directory" to "server/" in the Railway service settings.
 
 [build]
-builder = "NIXPACKS"
-# 1. Install deps  2. Generate Prisma client  3. Compile TypeScript
-buildCommand = "npm ci --cache /tmp/.npm && npx prisma generate && npm run build"
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
 
 [deploy]
-# Push schema to the database (creates tables if missing), then start.
-startCommand = "npx prisma db push --accept-data-loss && node dist/index.js"
 healthcheckPath = "/api/health"
 healthcheckTimeout = 300
 restartPolicyType = "ON_FAILURE"
