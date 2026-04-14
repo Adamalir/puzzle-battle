@@ -1,0 +1,83 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  username     String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  stats   UserStats?
+  games   GameParticipant[]
+  badges  UserBadge[]
+}
+
+model UserStats {
+  id              String @id @default(cuid())
+  userId          String @unique
+  user            User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  totalGames      Int @default(0)
+  totalWins       Int @default(0)
+  totalLosses     Int @default(0)
+
+  wordleAvgTime   Float @default(0)
+  wordleGames     Int   @default(0)
+  wordleWins      Int   @default(0)
+
+  starBattleAvgTime Float @default(0)
+  starBattleGames   Int   @default(0)
+  starBattleWins    Int   @default(0)
+
+  connectionsAvgTime Float @default(0)
+  connectionsGames   Int   @default(0)
+  connectionsWins    Int   @default(0)
+
+  eloRating       Int @default(1000)
+}
+
+model Game {
+  id          String   @id @default(cuid())
+  roomCode    String
+  puzzleType  String
+  difficulty  String
+  puzzleSeed  String
+  startedAt   DateTime @default(now())
+  finishedAt  DateTime?
+  winnerId    String?
+
+  participants GameParticipant[]
+}
+
+model GameParticipant {
+  id          String  @id @default(cuid())
+  gameId      String
+  userId      String
+  isGuest     Boolean @default(false)
+  guestName   String?
+  finishTime  Float?
+  isSpectator Boolean @default(false)
+  placement   Int?
+
+  game Game @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([gameId, userId])
+}
+
+model UserBadge {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  badgeId   String
+  earnedAt  DateTime @default(now())
+
+  @@unique([userId, badgeId])
+}
