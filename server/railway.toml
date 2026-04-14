@@ -2,7 +2,7 @@
 # Set "Root Directory" to "server/" in the Railway service settings.
 
 [build]
-builder = "DOCKERFILE"
+builder = "dockerfile"
 dockerfilePath = "Dockerfile"
 
 [deploy]
