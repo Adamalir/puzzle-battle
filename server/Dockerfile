@@ -37,7 +37,7 @@ RUN npx prisma generate
 # Compiled JS from the build stage
 COPY --from=builder /app/dist ./dist/
 
-EXPOSE 3001
+# PORT is injected by Railway at runtime — no hardcoded EXPOSE needed
 
 # Push schema (creates/migrates tables) then start
 CMD ["sh", "-c", "npx prisma db push --accept-data-loss && node dist/index.js"]

@@ -25,6 +25,6 @@ app.get('/api/health', (_req, res) => res.json({ status: 'ok' }));
 initSocket(server);
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`Puzzle Battle server running on port ${PORT}`);
 });
