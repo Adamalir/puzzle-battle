@@ -4,7 +4,7 @@
 [build]
 builder = "NIXPACKS"
 # 1. Install deps  2. Generate Prisma client  3. Compile TypeScript
-buildCommand = "npm ci && npx prisma generate && npm run build"
+buildCommand = "npm ci --cache /tmp/.npm && npx prisma generate && npm run build"
 
 [deploy]
 # Push schema to the database (creates tables if missing), then start.
