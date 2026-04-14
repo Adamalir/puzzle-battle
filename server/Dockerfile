@@ -1,6 +1,8 @@
 # ── Stage 1: build ────────────────────────────────────────────────────────────
 FROM node:20-alpine AS builder
 
+RUN apk add --no-cache openssl
+
 WORKDIR /app
 
 # Copy manifests first so this layer is cached unless deps change
@@ -21,6 +23,8 @@ RUN npm run build
 
 # ── Stage 2: production image ──────────────────────────────────────────────────
 FROM node:20-alpine AS runner
+
+RUN apk add --no-cache openssl
 
 WORKDIR /app
 
