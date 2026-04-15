@@ -172,7 +172,7 @@ export function generateStarBattle(difficulty: string, seed: string): StarBattle
     if (!ok || !colCounts.every(v => v === k)) continue;
 
     const regions = buildRegions(size, k, solution, rng);
-    const hints   = difficulty === 'hard' ? pickHints(size, solution, 3, rng) : undefined;
+    const hints   = difficulty === 'hard' ? pickHints(size, solution, 6, rng) : undefined;
 
     return { size, starsPerUnit: k, regions, solution, hints };
   }
