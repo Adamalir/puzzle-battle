@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useSocket } from '../context/SocketContext';
 import { motion, AnimatePresence } from 'framer-motion';
-import type { RoomState, GameResult } from '../types';
+import type { RoomState, GameResult, PuzzleType, Difficulty } from '../types';
 import RoomLobby from '../components/multiplayer/RoomLobby';
 import LiveSidebar from '../components/multiplayer/LiveSidebar';
 import ResultsScreen from '../components/multiplayer/ResultsScreen';
@@ -11,25 +11,70 @@ import WordleGame from '../components/puzzles/Wordle/WordleGame';
 import StarBattleGame from '../components/puzzles/StarBattle/StarBattleGame';
 import ConnectionsGame from '../components/puzzles/Connections/ConnectionsGame';
 
+const SESSION_KEY = 'puzzle-battle-room';
+
 export default function GamePage() {
   const { code } = useParams<{ code: string }>();
   const { user } = useAuth();
-  const { socket } = useSocket();
+  const { socket, connected, reconnecting } = useSocket();
   const navigate = useNavigate();
 
   const [room, setRoom] = useState<RoomState | null>(null);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [results, setResults] = useState<GameResult[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // Keep a ref to the latest room so the game:finished handler can read puzzleType
-  // without needing to re-register the socket listener on every room update.
+
   const roomRef = useRef<RoomState | null>(null);
   useEffect(() => { roomRef.current = room; }, [room]);
 
+  // Track reconnect so we know when a recovery has happened
+  const wasReconnectingRef = useRef(false);
+
+  // ── Session persistence helpers ──────────────────────────────────────────────
+
+  const tryRejoin = useCallback(() => {
+    if (!socket || !code || !user) return;
+    const saved = localStorage.getItem(SESSION_KEY);
+    if (!saved) return;
+    try {
+      const { roomCode } = JSON.parse(saved) as { roomCode: string };
+      if (roomCode === code.toUpperCase()) {
+        socket.emit('room:rejoin', { roomCode: code.toUpperCase(), userId: user.id });
+      }
+    } catch { /* ignore malformed JSON */ }
+  }, [socket, code, user]);
+
+  // After a reconnect fires, immediately attempt to rejoin the room
+  useEffect(() => {
+    if (reconnecting) { wasReconnectingRef.current = true; return; }
+    if (connected && wasReconnectingRef.current) {
+      wasReconnectingRef.current = false;
+      tryRejoin();
+    }
+  }, [connected, reconnecting, tryRejoin]);
+
+  // On first mount try rejoin (handles the page-refresh case)
+  const didMountRejoin = useRef(false);
+  useEffect(() => {
+    if (!socket || !code || !user || !connected || didMountRejoin.current) return;
+    didMountRejoin.current = true;
+    tryRejoin();
+  }, [socket, code, user, connected, tryRejoin]);
+
+  // ── Socket event handlers ────────────────────────────────────────────────────
   useEffect(() => {
     if (!socket || !code || !user) return;
 
-    const handleRoomUpdated = (r: RoomState) => setRoom(r);
+    const handleRoomUpdated  = (r: RoomState) => setRoom(r);
+
+    const handleRoomJoined   = (r: RoomState) => {
+      localStorage.setItem(SESSION_KEY, JSON.stringify({ roomCode: r.code }));
+      setRoom(r);
+    };
+
+    // room:rejoined brings back the full current state (active puzzle, player states, etc.)
+    const handleRoomRejoined = (r: RoomState) => setRoom(r);
+
     const handleCountdown = ({ countdownEnd, room: r }: { countdownEnd: number; room: RoomState }) => {
       setRoom(r);
       const tick = () => {
@@ -40,41 +85,65 @@ export default function GamePage() {
       };
       tick();
     };
-    const handleGameStarted = (r: RoomState) => { setRoom(r); setCountdown(null); };
-    const handleGameFinished = ({ results }: { results: GameResult[] }) => {
-      // For Wordle, wait for the flip animation on the last row to finish
-      // (4 tiles × 350 ms stagger + 500 ms flip + 300 ms buffer ≈ 2200 ms)
-      // before replacing the board with the results screen.
-      const delay = roomRef.current?.puzzleType === 'wordle' ? 2200 : 0;
-      setTimeout(() => setResults(results), delay);
-    };
-    const handleProgress = (r: RoomState) => setRoom(r);
-    const handleError = ({ message }: { message: string }) => setError(message);
 
-    socket.on('room:updated', handleRoomUpdated);
-    socket.on('room:joined', handleRoomUpdated);
+    const handleGameStarted  = (r: RoomState) => { setRoom(r); setCountdown(null); };
+
+    const handleGameFinished = ({ results: res }: { results: GameResult[] }) => {
+      const delay = roomRef.current?.puzzleType === 'wordle' ? 2200 : 0;
+      setTimeout(() => setResults(res), delay);
+    };
+
+    const handleProgress = (r: RoomState) => setRoom(r);
+    const handleError    = ({ message }: { message: string }) => setError(message);
+
+    // Play-again: server has reset the room back to waiting state
+    const handleReset = (r: RoomState) => {
+      setResults(null);
+      setCountdown(null);
+      setRoom(r);
+    };
+
+    socket.on('room:updated',   handleRoomUpdated);
+    socket.on('room:joined',    handleRoomJoined);
+    socket.on('room:created',   handleRoomJoined);  // save session on create too
+    socket.on('room:rejoined',  handleRoomRejoined);
     socket.on('game:countdown', handleCountdown);
-    socket.on('game:started', handleGameStarted);
-    socket.on('game:finished', handleGameFinished);
-    socket.on('game:progress', handleProgress);
-    socket.on('room:error', handleError);
+    socket.on('game:started',   handleGameStarted);
+    socket.on('game:finished',  handleGameFinished);
+    socket.on('game:progress',  handleProgress);
+    socket.on('room:error',     handleError);
+    socket.on('room:reset',     handleReset);
 
     return () => {
-      socket.off('room:updated', handleRoomUpdated);
-      socket.off('room:joined', handleRoomUpdated);
+      socket.off('room:updated',   handleRoomUpdated);
+      socket.off('room:joined',    handleRoomJoined);
+      socket.off('room:created',   handleRoomJoined);
+      socket.off('room:rejoined',  handleRoomRejoined);
       socket.off('game:countdown', handleCountdown);
-      socket.off('game:started', handleGameStarted);
-      socket.off('game:finished', handleGameFinished);
-      socket.off('game:progress', handleProgress);
-      socket.off('room:error', handleError);
+      socket.off('game:started',   handleGameStarted);
+      socket.off('game:finished',  handleGameFinished);
+      socket.off('game:progress',  handleProgress);
+      socket.off('room:error',     handleError);
+      socket.off('room:reset',     handleReset);
     };
   }, [socket, code, user]);
 
   const handleLeave = useCallback(() => {
+    localStorage.removeItem(SESSION_KEY);
     socket?.emit('room:leave');
     navigate('/lobby');
   }, [socket, navigate]);
 
+  const handlePlayAgain = useCallback((puzzleType: PuzzleType, difficulty: Difficulty) => {
+    socket?.emit('room:play-again', {
+      roomCode:   room?.code,
+      userId:     user?.id,
+      puzzleType,
+      difficulty,
+    });
+  }, [socket, room?.code, user?.id]);
+
+  // ── Render ───────────────────────────────────────────────────────────────────
   if (!room && !error) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
@@ -98,15 +167,22 @@ export default function GamePage() {
   }
 
   if (results) {
-    return <ResultsScreen results={results} room={room!} onLeave={handleLeave} />;
+    return (
+      <ResultsScreen
+        results={results}
+        room={room!}
+        userId={user!.id}
+        onPlayAgain={handlePlayAgain}
+        onLeave={handleLeave}
+      />
+    );
   }
 
-  const myPlayer = room ? room.players[user!.id] : null;
+  const myPlayer    = room ? room.players[user!.id] : null;
   const isSpectator = myPlayer?.isSpectator ?? true;
 
   return (
     <div className="max-w-7xl mx-auto px-4 py-6">
-      {/* Countdown overlay */}
       <AnimatePresence>
         {countdown !== null && (
           <motion.div
@@ -129,7 +205,6 @@ export default function GamePage() {
       </AnimatePresence>
 
       <div className="flex gap-6 flex-col lg:flex-row">
-        {/* Main puzzle area */}
         <div className="flex-1 min-w-0">
           {room?.status === 'waiting' && (
             <RoomLobby room={room} userId={user!.id} socket={socket!} onLeave={handleLeave} />
@@ -138,34 +213,18 @@ export default function GamePage() {
           {(room?.status === 'active' || room?.status === 'countdown') && room.puzzle && (
             <>
               {room.puzzleType === 'wordle' && (
-                <WordleGame
-                  room={room}
-                  userId={user!.id}
-                  socket={socket!}
-                  isSpectator={isSpectator}
-                />
+                <WordleGame room={room} userId={user!.id} socket={socket!} isSpectator={isSpectator} />
               )}
               {room.puzzleType === 'star-battle' && (
-                <StarBattleGame
-                  room={room}
-                  userId={user!.id}
-                  socket={socket!}
-                  isSpectator={isSpectator}
-                />
+                <StarBattleGame room={room} userId={user!.id} socket={socket!} isSpectator={isSpectator} />
               )}
               {room.puzzleType === 'connections' && (
-                <ConnectionsGame
-                  room={room}
-                  userId={user!.id}
-                  socket={socket!}
-                  isSpectator={isSpectator}
-                />
+                <ConnectionsGame room={room} userId={user!.id} socket={socket!} isSpectator={isSpectator} />
               )}
             </>
           )}
         </div>
 
-        {/* Sidebar */}
         {room && (room.status === 'active' || room.status === 'countdown' || room.status === 'finished') && (
           <LiveSidebar room={room} userId={user!.id} onLeave={handleLeave} />
         )}

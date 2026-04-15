@@ -1,6 +1,6 @@
 import { nanoid } from 'nanoid';
 import type {
-  Room, Player, PuzzleType, Difficulty, GameStatus,
+  Room, Player, PuzzleType, Difficulty,
   WordlePlayerState, StarBattlePlayerState, ConnectionsPlayerState,
 } from '../types/index';
 import { generateWordle } from './puzzleService/wordle';
@@ -69,7 +69,7 @@ export function joinRoom(
   const player: Player = {
     userId,
     username,
-    status: asSpectator ? 'waiting' : 'waiting',
+    status: 'waiting',
     progress: 0,
     isSpectator: asSpectator,
     isHost: false,
@@ -79,9 +79,28 @@ export function joinRoom(
   return { success: true, room };
 }
 
+// Rejoin an existing room after a page refresh or socket reconnect.
+// The player must already be present in the room (we never removed them
+// during an active game — see leaveRoom below).
+export function rejoinRoom(
+  code: string,
+  userId: string
+): { success: boolean; error?: string; room?: Room } {
+  const room = rooms.get(code);
+  if (!room) return { success: false, error: 'Room not found' };
+  if (!room.players.has(userId)) return { success: false, error: 'You are not in this room' };
+  return { success: true, room };
+}
+
 export function leaveRoom(code: string, userId: string): Room | undefined {
   const room = rooms.get(code);
   if (!room) return undefined;
+
+  // During an active or countdown game keep the player so they can reconnect.
+  if (room.status === 'active' || room.status === 'countdown') {
+    return room;
+  }
+
   room.players.delete(userId);
   room.playerStates.delete(userId);
 
@@ -90,7 +109,6 @@ export function leaveRoom(code: string, userId: string): Room | undefined {
     return undefined;
   }
 
-  // Transfer host if host left
   if (room.hostId === userId) {
     const nextPlayer = [...room.players.values()].find(p => !p.isSpectator);
     if (nextPlayer) {
@@ -113,26 +131,18 @@ export function startGame(code: string, userId: string): { success: boolean; err
   const seed = `${code}-${Date.now()}`;
 
   switch (room.puzzleType) {
-    case 'wordle':
-      room.puzzle = generateWordle(room.difficulty, seed);
-      break;
-    case 'star-battle':
-      room.puzzle = generateStarBattle(room.difficulty, seed);
-      break;
-    case 'connections':
-      room.puzzle = generateConnections(room.difficulty, seed);
-      break;
+    case 'wordle':      room.puzzle = generateWordle(room.difficulty, seed); break;
+    case 'star-battle': room.puzzle = generateStarBattle(room.difficulty, seed); break;
+    case 'connections': room.puzzle = generateConnections(room.difficulty, seed); break;
   }
 
-  // Initialize player states
   for (const player of activePlayers) {
-    const state = initPlayerState(room.puzzleType, room.puzzle);
-    room.playerStates.set(player.userId, state);
+    room.playerStates.set(player.userId, initPlayerState(room.puzzleType, room.puzzle));
     player.status = 'playing';
   }
 
   room.status = 'countdown';
-  room.countdownEnd = Date.now() + 3000; // 3s countdown
+  room.countdownEnd = Date.now() + 3000;
   return { success: true, room };
 }
 
@@ -144,6 +154,35 @@ export function activateGame(code: string): Room | undefined {
   return room;
 }
 
+// Reset a finished room so the same players can play another round.
+export function resetRoom(
+  code: string,
+  hostId: string,
+  puzzleType?: PuzzleType,
+  difficulty?: Difficulty
+): { success: boolean; error?: string; room?: Room } {
+  const room = rooms.get(code);
+  if (!room) return { success: false, error: 'Room not found' };
+  if (room.hostId !== hostId) return { success: false, error: 'Only the host can start a new round' };
+
+  room.status = 'waiting';
+  room.puzzle = null;
+  room.startTime = null;
+  room.countdownEnd = null;
+  room.gameId = null;
+  room.playerStates = new Map();
+  if (puzzleType) room.puzzleType = puzzleType;
+  if (difficulty)  room.difficulty = difficulty;
+
+  for (const player of room.players.values()) {
+    player.status = 'waiting';
+    player.progress = 0;
+    delete player.finishTime;
+  }
+
+  return { success: true, room };
+}
+
 function initPlayerState(
   puzzleType: PuzzleType,
   puzzle: Room['puzzle']
@@ -153,10 +192,13 @@ function initPlayerState(
       return { guesses: [], currentGuess: '', solved: false, failed: false };
     case 'star-battle': {
       const sb = puzzle as import('../types/index').StarBattlePuzzle;
-      return {
-        grid: Array.from({ length: sb.size }, () => new Array(sb.size).fill(0)),
-        solved: false,
-      };
+      // Pre-fill hint stars into the player's grid
+      const grid = Array.from({ length: sb.size }, (_, r) =>
+        Array.from({ length: sb.size }, (_, c) =>
+          sb.hints?.[r]?.[c] ? 1 : 0
+        )
+      );
+      return { grid, solved: false };
     }
     case 'connections':
       return { solvedCategories: [], selectedWords: [], mistakes: 0, solved: false };
@@ -166,7 +208,6 @@ function initPlayerState(
 }
 
 export function getRoomPublicView(room: Room): object {
-  // Strip sensitive puzzle data (e.g., Wordle answer) before sending to clients
   const { puzzle, puzzleType, ...rest } = room;
   let publicPuzzle: object | null = puzzle;
   if (puzzle && puzzleType === 'wordle') {

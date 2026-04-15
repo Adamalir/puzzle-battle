@@ -11,7 +11,7 @@ interface Props {
   isSpectator: boolean;
 }
 
-// 10 distinct region colors (dark-mode friendly)
+// 14 distinct region colors — enough for a 14×14 hard grid
 const REGION_COLORS = [
   'bg-blue-900/60',
   'bg-purple-900/60',
@@ -23,6 +23,10 @@ const REGION_COLORS = [
   'bg-orange-900/60',
   'bg-teal-900/60',
   'bg-indigo-900/60',
+  'bg-rose-900/60',
+  'bg-amber-900/60',
+  'bg-lime-900/60',
+  'bg-violet-900/60',
 ];
 
 const REGION_BORDERS = [
@@ -36,25 +40,29 @@ const REGION_BORDERS = [
   'border-orange-600/50',
   'border-teal-600/50',
   'border-indigo-600/50',
+  'border-rose-600/50',
+  'border-amber-600/50',
+  'border-lime-600/50',
+  'border-violet-600/50',
 ];
 
 export default function StarBattleGame({ room, userId, socket, isSpectator }: Props) {
-  const puzzle = room.puzzle as StarBattlePuzzle | null;
+  const puzzle  = room.puzzle as StarBattlePuzzle | null;
   const myState = room.playerStates[userId] as StarBattlePlayerState | undefined;
 
-  const grid = myState?.grid ?? [];
+  const grid   = myState?.grid  ?? [];
   const solved = myState?.solved ?? false;
 
   useEffect(() => {
-    const handleState = ({ state }: { state: StarBattlePlayerState; solved: boolean }) => {
-      // State is reflected via room:updated from server broadcast
-    };
-    socket.on('starbattle:state', handleState);
-    return () => { socket.off('starbattle:state', handleState); };
+    // State arrives via room:updated broadcasts; no extra action needed here
+    socket.on('starbattle:state', () => {});
+    return () => { socket.off('starbattle:state'); };
   }, [socket]);
 
   const handleCellClick = useCallback((row: number, col: number) => {
     if (isSpectator || solved || !puzzle) return;
+    if (puzzle.hints?.[row]?.[col]) return; // hint cells are locked
+
     const current = grid[row]?.[col] ?? 0;
     // Cycle: empty(0) → dot(2) → star(1) → empty(0)
     const CYCLE: Record<number, number> = { 0: 2, 2: 1, 1: 0 };
@@ -65,58 +73,72 @@ export default function StarBattleGame({ room, userId, socket, isSpectator }: Pr
   if (!puzzle) return null;
 
   const { size, starsPerUnit, regions } = puzzle;
+
+  // Cell sizing scaled to difficulty: easy=8×8, medium=10×10, hard=14×14
   const cellSize =
-    size <= 5  ? 'w-14 h-14 text-2xl' :
-    size <= 6  ? 'w-12 h-12 text-xl'  :
-    size <= 8  ? 'w-10 h-10 text-base':
-    size <= 10 ? 'w-9  h-9  text-sm'  :
-                 'w-7  h-7  text-xs';
+    size <= 8  ? 'w-11 h-11 text-xl'  :
+    size <= 10 ? 'w-9  h-9  text-base':
+    size <= 12 ? 'w-8  h-8  text-sm'  :
+                 'w-6  h-6  text-xs';
 
   return (
     <div className="flex flex-col items-center gap-6">
       <div className="text-center">
         <h2 className="text-xl font-bold">Star Battle</h2>
         <p className="text-sm text-gray-400 mt-1">
-          Place {starsPerUnit} star{starsPerUnit > 1 ? 's' : ''} per row, column & region · No stars can touch
+          Place {starsPerUnit} star{starsPerUnit > 1 ? 's' : ''} per row, column &amp; region · No stars can touch
         </p>
+        {puzzle.hints && (
+          <p className="text-xs text-yellow-400/80 mt-0.5">
+            Gold stars are pre-placed hints and cannot be moved
+          </p>
+        )}
       </div>
 
-      {/* Legend */}
       <div className="flex gap-4 text-sm text-gray-400">
         <span>⭐ = star</span>
         <span>· = marked empty</span>
         <span className="text-gray-600">Click to cycle</span>
       </div>
 
-      {/* Grid */}
-      <div className="inline-block p-2 bg-dark-800 rounded-xl border border-dark-600">
+      {/* Grid — overflow-x-auto so 14×14 doesn't overflow on small screens */}
+      <div className="inline-block p-2 bg-dark-800 rounded-xl border border-dark-600 max-w-full overflow-x-auto">
         <div
           className="grid gap-0.5"
           style={{ gridTemplateColumns: `repeat(${size}, minmax(0, 1fr))` }}
         >
           {Array.from({ length: size }, (_, r) =>
             Array.from({ length: size }, (_, c) => {
-              const region = regions[r]?.[c] ?? 0;
-              const value = grid[r]?.[c] ?? 0;
-              const regionColor = REGION_COLORS[region % REGION_COLORS.length];
+              const region       = regions[r]?.[c] ?? 0;
+              const value        = grid[r]?.[c] ?? 0;
+              const isHint       = puzzle.hints?.[r]?.[c] ?? false;
+              const regionColor  = REGION_COLORS[region % REGION_COLORS.length];
               const regionBorder = REGION_BORDERS[region % REGION_BORDERS.length];
 
               return (
                 <motion.button
                   key={`${r}-${c}`}
-                  whileTap={!isSpectator && !solved ? { scale: 0.9 } : {}}
+                  whileTap={!isSpectator && !solved && !isHint ? { scale: 0.88 } : {}}
                   onClick={() => handleCellClick(r, c)}
-                  disabled={isSpectator || solved}
+                  disabled={isSpectator || solved || isHint}
                   className={clsx(
                     cellSize,
                     'border rounded flex items-center justify-center font-bold transition-all select-none',
                     regionColor,
                     regionBorder,
-                    !isSpectator && !solved ? 'cursor-pointer hover:brightness-125' : 'cursor-default',
-                    value === 1 && 'ring-2 ring-yellow-400/60'
+                    isHint
+                      ? 'cursor-default ring-2 ring-yellow-400/80 brightness-125'
+                      : !isSpectator && !solved
+                        ? 'cursor-pointer hover:brightness-125'
+                        : 'cursor-default',
+                    value === 1 && !isHint && 'ring-2 ring-yellow-400/60'
                   )}
                 >
-                  {value === 1 ? '⭐' : value === 2 ? <span className="text-gray-500 text-xl">·</span> : null}
+                  {value === 1
+                    ? '⭐'
+                    : value === 2
+                      ? <span className="text-gray-500 leading-none">·</span>
+                      : null}
                 </motion.button>
               );
             })
@@ -124,10 +146,9 @@ export default function StarBattleGame({ room, userId, socket, isSpectator }: Pr
         </div>
       </div>
 
-      {/* Controls hint */}
       {!isSpectator && !solved && (
         <div className="text-xs text-gray-500 text-center">
-          Click once for ⭐ · Click again for · (marked empty) · Click again to clear
+          Click once for · (mark empty) · Click again for ⭐ · Click again to clear
         </div>
       )}
 
@@ -141,9 +162,7 @@ export default function StarBattleGame({ room, userId, socket, isSpectator }: Pr
         </motion.div>
       )}
 
-      {isSpectator && (
-        <p className="text-sm text-gray-500">Spectating</p>
-      )}
+      {isSpectator && <p className="text-sm text-gray-500">Spectating</p>}
     </div>
   );
 }

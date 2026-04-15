@@ -1,6 +1,6 @@
 import type { StarBattlePuzzle } from '../../types/index';
 
-// ── Seeded PRNG helpers ───────────────────────────────────────────────────────
+// ── Seeded PRNG ───────────────────────────────────────────────────────────────
 
 function mulberry32(seed: number): () => number {
   return function () {
@@ -26,14 +26,13 @@ function shuffle<T>(arr: T[], rng: () => number): T[] {
   return a;
 }
 
-// ── Step 1: generate a valid star placement ───────────────────────────────────
-//
-// Constraints: exactly k stars per row, k per column, no two stars adjacent
-// (including diagonally). Uses seeded row-by-row backtracking.
+// ── Step 1: valid star placement via backtracking ─────────────────────────────
+// Constraints: exactly k stars per row and per column, no 8-directional adjacency.
 
 function placeStars(size: number, k: number, rng: () => number): boolean[][] | null {
   const grid: boolean[][] = Array.from({ length: size }, () => new Array(size).fill(false));
   const colCount = new Array(size).fill(0);
+  const callLimit = size > 10 ? 3_000_000 : 500_000;
   let calls = 0;
 
   function canPlace(r: number, c: number): boolean {
@@ -49,7 +48,7 @@ function placeStars(size: number, k: number, rng: () => number): boolean[][] | n
   }
 
   function bt(row: number, placed: number): boolean {
-    if (++calls > 500_000) return false;           // safety escape hatch
+    if (++calls > callLimit) return false;
     if (row === size) return colCount.every(v => v === k);
     if (placed === k) return bt(row + 1, 0);
 
@@ -68,48 +67,33 @@ function placeStars(size: number, k: number, rng: () => number): boolean[][] | n
   return bt(0, 0) ? grid : null;
 }
 
-// ── Step 2: build connected regions from a solved star placement ──────────────
-//
-// Region index = row index (k=1: one star per region; k=2: both stars in a
-// row belong to that row's region).
-//
-// Connectivity guarantee for k=2: before BFS expansion we pre-claim the
-// horizontal bridge between the two stars in each row. Since bridges are
-// confined to a single row they cannot conflict with each other.
+// ── Step 2: connected regions from star placement ─────────────────────────────
+// Region index = row index. Bridge pre-claim guarantees connectivity for k≥2.
 
 function buildRegions(size: number, k: number, stars: boolean[][], rng: () => number): number[][] {
   const regions: number[][] = Array.from({ length: size }, () => new Array(size).fill(-1));
   const dirs: Array<[number, number]> = [[-1, 0], [1, 0], [0, -1], [0, 1]];
 
-  // Seed every star cell with its row's region index
-  for (let r = 0; r < size; r++) {
-    for (let c = 0; c < size; c++) {
+  for (let r = 0; r < size; r++)
+    for (let c = 0; c < size; c++)
       if (stars[r][c]) regions[r][c] = r;
-    }
-  }
 
-  // For k≥2 pre-claim the straight-line bridge between each pair so the
-  // region is always connected even before BFS expansion begins.
   if (k >= 2) {
     for (let r = 0; r < size; r++) {
       const cols = Array.from({ length: size }, (_, c) => c).filter(c => stars[r][c]);
       if (cols.length >= 2) {
         const lo = Math.min(...cols);
         const hi = Math.max(...cols);
-        for (let c = lo + 1; c < hi; c++) {
+        for (let c = lo + 1; c < hi; c++)
           if (regions[r][c] === -1) regions[r][c] = r;
-        }
       }
     }
   }
 
-  // Randomised multi-source BFS — gives organic, Voronoi-like region shapes
   const frontier: Array<[number, number]> = [];
-  for (let r = 0; r < size; r++) {
-    for (let c = 0; c < size; c++) {
+  for (let r = 0; r < size; r++)
+    for (let c = 0; c < size; c++)
       if (regions[r][c] !== -1) frontier.push([r, c]);
-    }
-  }
 
   while (frontier.length > 0) {
     const idx = Math.floor(rng() * frontier.length);
@@ -124,42 +108,58 @@ function buildRegions(size: number, k: number, stars: boolean[][], rng: () => nu
     }
   }
 
-  // Defensive: patch any cell that was somehow missed (shouldn't happen)
-  for (let r = 0; r < size; r++) {
-    for (let c = 0; c < size; c++) {
-      if (regions[r][c] === -1) {
+  for (let r = 0; r < size; r++)
+    for (let c = 0; c < size; c++)
+      if (regions[r][c] === -1)
         for (const [dr, dc] of dirs) {
           const nr = r + dr, nc = c + dc;
           if (nr >= 0 && nr < size && nc >= 0 && nc < size && regions[nr][nc] !== -1) {
-            regions[r][c] = regions[nr][nc];
-            break;
+            regions[r][c] = regions[nr][nc]; break;
           }
         }
-      }
-    }
-  }
 
   return regions;
 }
 
+// ── Hint selection (hard mode) ────────────────────────────────────────────────
+// Picks numHints stars spread evenly across the grid as pre-revealed hints.
+
+function pickHints(size: number, solution: boolean[][], numHints: number, rng: () => number): boolean[][] {
+  const stars: [number, number][] = [];
+  for (let r = 0; r < size; r++)
+    for (let c = 0; c < size; c++)
+      if (solution[r][c]) stars.push([r, c]);
+
+  const shuffled = shuffle(stars, rng);
+  const step = Math.floor(shuffled.length / numHints);
+  const hints: boolean[][] = Array.from({ length: size }, () => new Array(size).fill(false));
+  for (let i = 0; i < numHints; i++) {
+    const [r, c] = shuffled[i * step];
+    hints[r][c] = true;
+  }
+  return hints;
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
+// easy:   8×8,  k=1
+// medium: 10×10, k=2
+// hard:   14×14, k=3  (3 pre-placed hint stars shown to players)
 
 export function generateStarBattle(difficulty: string, seed: string): StarBattlePuzzle {
-  let size: number, starsPerUnit: number;
+  let size: number, k: number;
   switch (difficulty) {
-    case 'easy':  size = 5;  starsPerUnit = 1; break;
-    case 'hard':  size = 10; starsPerUnit = 2; break;
-    default:      size = 6;  starsPerUnit = 1; break; // medium
+    case 'easy': size = 8;  k = 1; break;
+    case 'hard': size = 14; k = 3; break;
+    default:     size = 10; k = 2; break;
   }
 
-  // Try up to 6 seeds; each attempt uses a freshly seeded RNG so we get
-  // genuine variety without just retrying the same shuffle order.
-  for (let attempt = 0; attempt < 6; attempt++) {
+  const maxAttempts = difficulty === 'hard' ? 16 : 8;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const rng = mulberry32(strToSeed(`${seed}:${difficulty}:${attempt}`));
-    const solution = placeStars(size, starsPerUnit, rng);
+    const solution = placeStars(size, k, rng);
     if (!solution) continue;
 
-    // Quick sanity-check before committing
     const colCounts = new Array(size).fill(0);
     let ok = true;
     for (let r = 0; r < size; r++) {
@@ -167,30 +167,27 @@ export function generateStarBattle(difficulty: string, seed: string): StarBattle
       for (let c = 0; c < size; c++) {
         if (solution[r][c]) { rowTotal++; colCounts[c]++; }
       }
-      if (rowTotal !== starsPerUnit) { ok = false; break; }
+      if (rowTotal !== k) { ok = false; break; }
     }
-    if (ok && colCounts.every(v => v === starsPerUnit)) {
-      const regions = buildRegions(size, starsPerUnit, solution, rng);
-      return { size, starsPerUnit, regions, solution };
-    }
+    if (!ok || !colCounts.every(v => v === k)) continue;
+
+    const regions = buildRegions(size, k, solution, rng);
+    const hints   = difficulty === 'hard' ? pickHints(size, solution, 3, rng) : undefined;
+
+    return { size, starsPerUnit: k, regions, solution, hints };
   }
 
-  // Absolute fallback — returns a trivially simple diagonal puzzle.
-  // Only reached if placeStars fails every attempt (practically impossible).
+  // Fallback (practically never reached)
   const fallbackSolution = Array.from({ length: size }, (_, r) =>
     Array.from({ length: size }, (_, c) => c === r)
   );
   const fallbackRegions = Array.from({ length: size }, (_, r) =>
     Array.from({ length: size }, (_, c) => (r + c) % size)
   );
-  return { size, starsPerUnit, regions: fallbackRegions, solution: fallbackSolution };
+  return { size, starsPerUnit: k, regions: fallbackRegions, solution: fallbackSolution };
 }
 
-// ── Validation (used by the game handler) ────────────────────────────────────
-//
-// Validates the player's grid against the puzzle rules directly rather than
-// comparing to the pre-computed solution. This accepts any valid solution,
-// not just the one the generator produced.
+// ── Validation ────────────────────────────────────────────────────────────────
 
 export function checkStarBattleSolved(grid: number[][], puzzle: StarBattlePuzzle): boolean {
   const { size, starsPerUnit, regions } = puzzle;
@@ -201,21 +198,15 @@ export function checkStarBattleSolved(grid: number[][], puzzle: StarBattlePuzzle
   for (let r = 0; r < size; r++) {
     for (let c = 0; c < size; c++) {
       if (grid[r][c] !== 1) continue;
-
       rowCounts[r]++;
       colCounts[c]++;
       regCounts[regions[r][c]]++;
-
-      // Check all 8 neighbours for adjacency violations
-      for (let dr = -1; dr <= 1; dr++) {
+      for (let dr = -1; dr <= 1; dr++)
         for (let dc = -1; dc <= 1; dc++) {
           if (dr === 0 && dc === 0) continue;
           const nr = r + dr, nc = c + dc;
-          if (nr >= 0 && nr < size && nc >= 0 && nc < size && grid[nr][nc] === 1) {
-            return false; // two stars touching
-          }
+          if (nr >= 0 && nr < size && nc >= 0 && nc < size && grid[nr][nc] === 1) return false;
         }
-      }
     }
   }
 
@@ -229,13 +220,8 @@ export function checkStarBattleSolved(grid: number[][], puzzle: StarBattlePuzzle
 export function calcStarBattleProgress(grid: number[][], puzzle: StarBattlePuzzle): number {
   const { size, solution } = puzzle;
   let correct = 0, total = 0;
-  for (let r = 0; r < size; r++) {
-    for (let c = 0; c < size; c++) {
-      if (solution[r][c]) {
-        total++;
-        if (grid[r][c] === 1) correct++;
-      }
-    }
-  }
+  for (let r = 0; r < size; r++)
+    for (let c = 0; c < size; c++)
+      if (solution[r][c]) { total++; if (grid[r][c] === 1) correct++; }
   return total > 0 ? Math.round((correct / total) * 100) : 0;
 }

@@ -57,7 +57,7 @@ export function registerGameHandlers(io: Server, socket: Socket) {
 
     const upper = guess.toUpperCase();
     if (!isValidWord(upper)) {
-      socket.emit('wordle:invalid', { message: 'Not a valid 5-letter word' });
+      socket.emit('wordle:invalid', { message: 'Not in word list' });
       return;
     }
 
@@ -94,7 +94,9 @@ export function registerGameHandlers(io: Server, socket: Socket) {
     const state = getPlayerState(roomCode, userId) as StarBattlePlayerState;
     if (!state || state.solved) return;
 
-    // Cycle: empty→star→dot→empty, or set directly
+    // Prevent changing pre-revealed hint cells
+    if (puzzle.hints?.[row]?.[col]) return;
+
     state.grid[row][col] = value;
 
     const solved = checkStarBattleSolved(state.grid, puzzle);

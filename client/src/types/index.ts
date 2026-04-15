@@ -60,7 +60,8 @@ export interface StarBattlePuzzle {
   size: number;
   starsPerUnit: number;
   regions: number[][];
-  solution: boolean[][]; // sent for client-side validation display after game
+  solution: boolean[][];  // sent for client-side display after game
+  hints?: boolean[][];    // pre-revealed stars (hard mode only)
 }
 
 export interface ConnectionsCategory {

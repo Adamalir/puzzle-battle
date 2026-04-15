@@ -45,10 +45,11 @@ export interface WordlePlayerState {
 // ── Star Battle ───────────────────────────────────────────────────────────────
 
 export interface StarBattlePuzzle {
-  size: number;        // grid dimension (e.g. 5, 6, 8)
-  starsPerUnit: number; // stars per row/col/region
-  regions: number[][];  // size×size matrix, each cell = region index (0-based)
-  solution: boolean[][];// size×size, true = star
+  size: number;          // grid dimension (8, 10, or 14)
+  starsPerUnit: number;  // stars per row/col/region
+  regions: number[][];   // size×size matrix, each cell = region index (0-based)
+  solution: boolean[][]; // size×size, true = star
+  hints?: boolean[][];   // pre-revealed stars for players (hard mode only)
 }
 
 export interface StarBattlePlayerState {
