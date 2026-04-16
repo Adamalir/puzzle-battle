@@ -67,58 +67,165 @@ function placeStars(size: number, k: number, rng: () => number): boolean[][] | n
   return bt(0, 0) ? grid : null;
 }
 
-// ── Step 2: connected regions from star placement ─────────────────────────────
-// Region index = row index. Bridge pre-claim guarantees connectivity for k≥2.
+// ── Step 2: balanced region growth ────────────────────────────────────────────
+// Each of the N regions starts from row r's star cells and grows outward.
+// Balanced growth ensures regions are roughly equal in size (~N cells each).
+// Returns null if any region is too small (triggers a full retry).
 
-function buildRegions(size: number, k: number, stars: boolean[][], rng: () => number): number[][] {
+function buildRegions(size: number, k: number, stars: boolean[][], rng: () => number): number[][] | null {
   const regions: number[][] = Array.from({ length: size }, () => new Array(size).fill(-1));
   const dirs: Array<[number, number]> = [[-1, 0], [1, 0], [0, -1], [0, 1]];
+  const regionSizes = new Array(size).fill(0);
 
-  for (let r = 0; r < size; r++)
-    for (let c = 0; c < size; c++)
-      if (stars[r][c]) regions[r][c] = r;
+  // Assign star cells to their row's region
+  for (let r = 0; r < size; r++) {
+    for (let c = 0; c < size; c++) {
+      if (stars[r][c]) {
+        regions[r][c] = r;
+        regionSizes[r]++;
+      }
+    }
+  }
 
+  // For k >= 2, assign bridge cells between stars in the same row
   if (k >= 2) {
     for (let r = 0; r < size; r++) {
       const cols = Array.from({ length: size }, (_, c) => c).filter(c => stars[r][c]);
       if (cols.length >= 2) {
         const lo = Math.min(...cols);
         const hi = Math.max(...cols);
-        for (let c = lo + 1; c < hi; c++)
-          if (regions[r][c] === -1) regions[r][c] = r;
-      }
-    }
-  }
-
-  const frontier: Array<[number, number]> = [];
-  for (let r = 0; r < size; r++)
-    for (let c = 0; c < size; c++)
-      if (regions[r][c] !== -1) frontier.push([r, c]);
-
-  while (frontier.length > 0) {
-    const idx = Math.floor(rng() * frontier.length);
-    const [r, c] = frontier.splice(idx, 1)[0];
-    const reg = regions[r][c];
-    for (const [dr, dc] of dirs) {
-      const nr = r + dr, nc = c + dc;
-      if (nr >= 0 && nr < size && nc >= 0 && nc < size && regions[nr][nc] === -1) {
-        regions[nr][nc] = reg;
-        frontier.push([nr, nc]);
-      }
-    }
-  }
-
-  for (let r = 0; r < size; r++)
-    for (let c = 0; c < size; c++)
-      if (regions[r][c] === -1)
-        for (const [dr, dc] of dirs) {
-          const nr = r + dr, nc = c + dc;
-          if (nr >= 0 && nr < size && nc >= 0 && nc < size && regions[nr][nc] !== -1) {
-            regions[r][c] = regions[nr][nc]; break;
+        for (let c = lo + 1; c < hi; c++) {
+          if (regions[r][c] === -1) {
+            regions[r][c] = r;
+            regionSizes[r]++;
           }
         }
+      }
+    }
+  }
+
+  // Build initial per-region frontiers (encoded as r*size+c integers)
+  const frontiers: Set<number>[] = Array.from({ length: size }, () => new Set());
+  for (let r = 0; r < size; r++) {
+    for (let c = 0; c < size; c++) {
+      if (regions[r][c] !== -1) {
+        const reg = regions[r][c];
+        for (const [dr, dc] of dirs) {
+          const nr = r + dr, nc = c + dc;
+          if (nr >= 0 && nr < size && nc >= 0 && nc < size && regions[nr][nc] === -1) {
+            frontiers[reg].add(nr * size + nc);
+          }
+        }
+      }
+    }
+  }
+
+  const totalCells = size * size;
+  let assigned = regionSizes.reduce((s, v) => s + v, 0);
+
+  // Balanced growth: always expand the region(s) with fewest cells.
+  // Among tied-smallest regions with frontier cells, pick randomly.
+  while (assigned < totalCells) {
+    // Find the minimum current size among regions that still have frontier cells
+    let minSz = Infinity;
+    for (let reg = 0; reg < size; reg++) {
+      if (frontiers[reg].size > 0 && regionSizes[reg] < minSz) minSz = regionSizes[reg];
+    }
+    if (minSz === Infinity) break; // no region can grow further
+
+    // Collect all regions tied at minimum size
+    const tied: number[] = [];
+    for (let reg = 0; reg < size; reg++) {
+      if (frontiers[reg].size > 0 && regionSizes[reg] === minSz) tied.push(reg);
+    }
+
+    // Pick one at random, then pick a random frontier cell from it
+    const chosenReg = tied[Math.floor(rng() * tied.length)];
+    const candidates = [...frontiers[chosenReg]];
+    const pick = candidates[Math.floor(rng() * candidates.length)];
+    frontiers[chosenReg].delete(pick);
+
+    const nr = Math.floor(pick / size);
+    const nc = pick % size;
+    if (regions[nr][nc] !== -1) continue; // already claimed by another region
+
+    regions[nr][nc] = chosenReg;
+    regionSizes[chosenReg]++;
+    assigned++;
+
+    // Expand frontier
+    for (const [dr, dc] of dirs) {
+      const nnr = nr + dr, nnc = nc + dc;
+      if (nnr >= 0 && nnr < size && nnc >= 0 && nnc < size && regions[nnr][nnc] === -1) {
+        frontiers[chosenReg].add(nnr * size + nnc);
+      }
+    }
+  }
+
+  // Flood-fill any cells still unassigned (can occur when a frontier is exhausted early)
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (let r = 0; r < size; r++) {
+      for (let c = 0; c < size; c++) {
+        if (regions[r][c] === -1) {
+          for (const [dr, dc] of dirs) {
+            const nr = r + dr, nc = c + dc;
+            if (nr >= 0 && nr < size && nc >= 0 && nc < size && regions[nr][nc] !== -1) {
+              const reg = regions[nr][nc];
+              regions[r][c] = reg;
+              regionSizes[reg]++;
+              changed = true;
+              break;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Validate: every region must have at least `size` cells.
+  // (N×N grid / N regions = N cells each is the target; reject anything smaller.)
+  const minRequired = size;
+  if (regionSizes.some(s => s < minRequired)) return null;
+
+  // Validate: each region must be able to hold k non-adjacent stars.
+  // (By construction the solution already places k stars in each region, so
+  // this is always true — but we check anyway to catch degenerate shapes.)
+  for (let reg = 0; reg < size; reg++) {
+    const cells: [number, number][] = [];
+    for (let r = 0; r < size; r++)
+      for (let c = 0; c < size; c++)
+        if (regions[r][c] === reg) cells.push([r, c]);
+    if (!canPlaceKStarsInCells(cells, k)) return null;
+  }
 
   return regions;
+}
+
+// ── Region feasibility check ──────────────────────────────────────────────────
+// Returns true if k non-adjacent (king-move) stars can be placed anywhere in cells.
+
+function canPlaceKStarsInCells(cells: [number, number][], k: number): boolean {
+  function bt(start: number, placed: [number, number][]): boolean {
+    if (placed.length === k) return true;
+    const remaining = cells.length - start;
+    if (remaining < k - placed.length) return false; // pruning
+    for (let i = start; i < cells.length; i++) {
+      const [r, c] = cells[i];
+      let ok = true;
+      for (const [pr, pc] of placed) {
+        if (Math.abs(r - pr) <= 1 && Math.abs(c - pc) <= 1) { ok = false; break; }
+      }
+      if (ok) {
+        placed.push([r, c]);
+        if (bt(i + 1, placed)) return true;
+        placed.pop();
+      }
+    }
+    return false;
+  }
+  return bt(0, []);
 }
 
 // ── Hint selection (hard mode) ────────────────────────────────────────────────
@@ -143,7 +250,7 @@ function pickHints(size: number, solution: boolean[][], numHints: number, rng: (
 // ── Public API ────────────────────────────────────────────────────────────────
 // easy:   8×8,  k=1
 // medium: 10×10, k=2
-// hard:   14×14, k=3  (3 pre-placed hint stars shown to players)
+// hard:   14×14, k=3  (6 pre-placed hint stars shown to players)
 
 export function generateStarBattle(difficulty: string, seed: string): StarBattlePuzzle {
   let size: number, k: number;
@@ -153,13 +260,15 @@ export function generateStarBattle(difficulty: string, seed: string): StarBattle
     default:     size = 10; k = 2; break;
   }
 
-  const maxAttempts = difficulty === 'hard' ? 16 : 8;
+  // More attempts — region validation can reject many candidates.
+  const maxAttempts = difficulty === 'hard' ? 64 : 48;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const rng = mulberry32(strToSeed(`${seed}:${difficulty}:${attempt}`));
     const solution = placeStars(size, k, rng);
     if (!solution) continue;
 
+    // Verify star counts (belt-and-suspenders)
     const colCounts = new Array(size).fill(0);
     let ok = true;
     for (let r = 0; r < size; r++) {
@@ -172,12 +281,14 @@ export function generateStarBattle(difficulty: string, seed: string): StarBattle
     if (!ok || !colCounts.every(v => v === k)) continue;
 
     const regions = buildRegions(size, k, solution, rng);
-    const hints   = difficulty === 'hard' ? pickHints(size, solution, 6, rng) : undefined;
+    if (!regions) continue; // region validation failed — try next seed
+
+    const hints = difficulty === 'hard' ? pickHints(size, solution, 6, rng) : undefined;
 
     return { size, starsPerUnit: k, regions, solution, hints };
   }
 
-  // Fallback (practically never reached)
+  // Fallback (practically never reached with 48–64 attempts)
   const fallbackSolution = Array.from({ length: size }, (_, r) =>
     Array.from({ length: size }, (_, c) => c === r)
   );
