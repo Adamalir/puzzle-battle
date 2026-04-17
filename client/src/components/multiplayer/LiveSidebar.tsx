@@ -5,6 +5,7 @@ interface Props {
   room: RoomState;
   userId: string;
   onLeave: () => void;
+  onForceReset?: () => void;
 }
 
 function formatTime(ms: number): string {
@@ -13,7 +14,7 @@ function formatTime(ms: number): string {
   return `${m}:${String(s % 60).padStart(2, '0')}`;
 }
 
-export default function LiveSidebar({ room, userId, onLeave }: Props) {
+export default function LiveSidebar({ room, userId, onLeave, onForceReset }: Props) {
   const [elapsed, setElapsed] = useState(0);
 
   useEffect(() => {
@@ -97,7 +98,15 @@ export default function LiveSidebar({ room, userId, onLeave }: Props) {
           </>
         )}
 
-        <div className="border-t border-dark-600 pt-2">
+        <div className="border-t border-dark-600 pt-2 space-y-1">
+          {onForceReset && room.hostId === userId && (
+            <button
+              onClick={onForceReset}
+              className="btn-ghost w-full text-sm text-yellow-400 hover:text-yellow-300 hover:bg-yellow-500/10"
+            >
+              Reset Room
+            </button>
+          )}
           <button onClick={onLeave} className="btn-ghost w-full text-sm text-red-400 hover:text-red-300 hover:bg-red-500/10">
             Leave Game
           </button>

@@ -73,7 +73,12 @@ export default function GamePage() {
     };
 
     // room:rejoined brings back the full current state (active puzzle, player states, etc.)
-    const handleRoomRejoined = (r: RoomState) => setRoom(r);
+    const handleRoomRejoined = (r: RoomState) => {
+      // If the room is finished (e.g. rejoining after everyone has solved),
+      // stay on the game page — the results will arrive via game:finished,
+      // or the room:updated event will route us to the right view.
+      setRoom(r);
+    };
 
     const handleCountdown = ({ countdownEnd, room: r }: { countdownEnd: number; room: RoomState }) => {
       setRoom(r);
@@ -94,7 +99,18 @@ export default function GamePage() {
     };
 
     const handleProgress = (r: RoomState) => setRoom(r);
-    const handleError    = ({ message }: { message: string }) => setError(message);
+
+    const handleError = ({ message }: { message: string }) => {
+      // Rejoin errors mean the session is stale — clean up and go back to lobby
+      // rather than stranding the user on a broken loading screen.
+      const rejoinErrors = ['Room not found', 'You are not in this room'];
+      if (rejoinErrors.some(e => message.includes(e))) {
+        localStorage.removeItem(SESSION_KEY);
+        navigate('/lobby');
+        return;
+      }
+      setError(message);
+    };
 
     // Play-again: server has reset the room back to waiting state
     const handleReset = (r: RoomState) => {
@@ -141,6 +157,10 @@ export default function GamePage() {
       puzzleType,
       difficulty,
     });
+  }, [socket, room?.code, user?.id]);
+
+  const handleForceReset = useCallback(() => {
+    socket?.emit('room:force-reset', { roomCode: room?.code, userId: user?.id });
   }, [socket, room?.code, user?.id]);
 
   // ── Render ───────────────────────────────────────────────────────────────────
@@ -207,7 +227,7 @@ export default function GamePage() {
       <div className="flex gap-6 flex-col lg:flex-row">
         <div className="flex-1 min-w-0">
           {room?.status === 'waiting' && (
-            <RoomLobby room={room} userId={user!.id} socket={socket!} onLeave={handleLeave} />
+            <RoomLobby room={room} userId={user!.id} socket={socket!} onLeave={handleLeave} onForceReset={handleForceReset} />
           )}
 
           {(room?.status === 'active' || room?.status === 'countdown') && room.puzzle && (
@@ -226,7 +246,7 @@ export default function GamePage() {
         </div>
 
         {room && (room.status === 'active' || room.status === 'countdown' || room.status === 'finished') && (
-          <LiveSidebar room={room} userId={user!.id} onLeave={handleLeave} />
+          <LiveSidebar room={room} userId={user!.id} onLeave={handleLeave} onForceReset={handleForceReset} />
         )}
       </div>
     </div>

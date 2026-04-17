@@ -8,9 +8,10 @@ interface Props {
   userId: string;
   socket: Socket;
   onLeave: () => void;
+  onForceReset?: () => void;
 }
 
-export default function RoomLobby({ room, userId, socket, onLeave }: Props) {
+export default function RoomLobby({ room, userId, socket, onLeave, onForceReset }: Props) {
   const [copied, setCopied] = useState(false);
   const isHost = room.hostId === userId;
   const activePlayers = Object.values(room.players).filter(p => !p.isSpectator);

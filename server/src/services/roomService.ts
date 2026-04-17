@@ -92,14 +92,11 @@ export function rejoinRoom(
   return { success: true, room };
 }
 
+// Intentional leave (player clicked "Back to Lobby" / "Leave Game").
+// Always removes the player regardless of game status.
 export function leaveRoom(code: string, userId: string): Room | undefined {
   const room = rooms.get(code);
   if (!room) return undefined;
-
-  // During an active or countdown game keep the player so they can reconnect.
-  if (room.status === 'active' || room.status === 'countdown') {
-    return room;
-  }
 
   room.players.delete(userId);
   room.playerStates.delete(userId);
@@ -117,6 +114,20 @@ export function leaveRoom(code: string, userId: string): Room | undefined {
     }
   }
   return room;
+}
+
+// Socket disconnect (browser closed / network drop).
+// During an active/countdown game we keep the player so they can reconnect;
+// in the lobby we remove them immediately (same as an intentional leave).
+export function disconnectFromRoom(code: string, userId: string): Room | undefined {
+  const room = rooms.get(code);
+  if (!room) return undefined;
+
+  if (room.status === 'active' || room.status === 'countdown') {
+    return room; // keep player; they can rejoin
+  }
+
+  return leaveRoom(code, userId);
 }
 
 export function startGame(code: string, userId: string): { success: boolean; error?: string; room?: Room } {
@@ -154,7 +165,8 @@ export function activateGame(code: string): Room | undefined {
   return room;
 }
 
-// Reset a finished room so the same players can play another round.
+// Reset a room back to waiting so the same players can play another round.
+// Works from any status — used for both "Play Again" and the host's "Force Reset".
 export function resetRoom(
   code: string,
   hostId: string,
@@ -163,7 +175,7 @@ export function resetRoom(
 ): { success: boolean; error?: string; room?: Room } {
   const room = rooms.get(code);
   if (!room) return { success: false, error: 'Room not found' };
-  if (room.hostId !== hostId) return { success: false, error: 'Only the host can start a new round' };
+  if (room.hostId !== hostId) return { success: false, error: 'Only the host can reset the room' };
 
   room.status = 'waiting';
   room.puzzle = null;
@@ -256,12 +268,54 @@ export function finishRoom(code: string) {
   if (room) room.status = 'finished';
 }
 
-// Clean up old finished rooms after 1 hour
+// Periodic cleanup:
+//  • Finished rooms   → delete after 1 hour
+//  • Active/countdown rooms with no activity for 2 hours → reset to waiting
+//    (lets players come back without the "game already started" wall)
+//  • Countdown rooms where the 3-second window expired but activateGame never ran
+//    (e.g. server restart mid-countdown) → reset immediately
 setInterval(() => {
-  const cutoff = Date.now() - 3600_000;
+  const now = Date.now();
+  const finishedCutoff  = now - 3_600_000;  // 1 hour
+  const staleCutoff     = now - 7_200_000;  // 2 hours
+
   for (const [code, room] of rooms) {
-    if (room.status === 'finished' && room.startTime && room.startTime < cutoff) {
+    if (room.status === 'finished' && room.startTime && room.startTime < finishedCutoff) {
       rooms.delete(code);
+      continue;
+    }
+
+    // Reset stale active games so returning players don't hit "game already started"
+    if (
+      (room.status === 'active' || room.status === 'countdown') &&
+      room.startTime && room.startTime < staleCutoff
+    ) {
+      room.status = 'waiting';
+      room.puzzle = null;
+      room.startTime = null;
+      room.countdownEnd = null;
+      room.gameId = null;
+      room.playerStates = new Map();
+      for (const player of room.players.values()) {
+        player.status = 'waiting';
+        player.progress = 0;
+        delete player.finishTime;
+      }
+      continue;
+    }
+
+    // Countdown that never transitioned to active (server restart / crash mid-count)
+    if (room.status === 'countdown' && room.countdownEnd && room.countdownEnd < now - 30_000) {
+      room.status = 'waiting';
+      room.puzzle = null;
+      room.countdownEnd = null;
+      room.gameId = null;
+      room.playerStates = new Map();
+      for (const player of room.players.values()) {
+        player.status = 'waiting';
+        player.progress = 0;
+        delete player.finishTime;
+      }
     }
   }
 }, 300_000);

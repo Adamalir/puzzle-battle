@@ -1,8 +1,8 @@
 import { Server, Socket } from 'socket.io';
 import type { CreateRoomPayload, JoinRoomPayload, StartGamePayload } from '../../types/index';
 import {
-  createRoom, joinRoom, rejoinRoom, leaveRoom, startGame, activateGame,
-  resetRoom, getRoomPublicView, getRoom,
+  createRoom, joinRoom, rejoinRoom, leaveRoom, disconnectFromRoom,
+  startGame, activateGame, resetRoom, getRoomPublicView, getRoom,
 } from '../../services/roomService';
 
 interface PlayAgainPayload {
@@ -95,6 +95,20 @@ export function registerRoomHandlers(io: Server, socket: Socket) {
     io.to(code).emit('room:reset', getRoomPublicView(result.room));
   });
 
+  // ── Force-reset (host only) — works from any status ─────────────────────────
+  // Lets the host un-stick a room that got stranded in active/countdown/finished.
+  socket.on('room:force-reset', (payload: { roomCode: string; userId: string }) => {
+    const code   = payload.roomCode.toUpperCase();
+    const result = resetRoom(code, payload.userId);
+
+    if (!result.success || !result.room) {
+      socket.emit('room:error', { message: result.error });
+      return;
+    }
+
+    io.to(code).emit('room:reset', getRoomPublicView(result.room));
+  });
+
   // ── Leave (explicit) ────────────────────────────────────────────────────────
   socket.on('room:leave', () => {
     const { userId, roomCode } = socket.data;
@@ -107,9 +121,9 @@ export function registerRoomHandlers(io: Server, socket: Socket) {
     }
   });
 
-  // ── Disconnect ──────────────────────────────────────────────────────────────
-  // During an active game leaveRoom keeps the player in the room so they can
-  // reconnect via room:rejoin.  In the lobby we remove them immediately.
+  // ── Disconnect (browser closed / network drop) ──────────────────────────────
+  // During an active game we keep the player so they can reconnect via room:rejoin.
+  // In the lobby (or after a finished game) we remove them immediately.
   socket.on('disconnect', () => {
     const { userId, roomCode } = socket.data;
     if (!userId || !roomCode) return;
@@ -120,7 +134,7 @@ export function registerRoomHandlers(io: Server, socket: Socket) {
       return;
     }
 
-    const updatedRoom = leaveRoom(roomCode, userId);
+    const updatedRoom = disconnectFromRoom(roomCode, userId);
     if (updatedRoom) {
       io.to(roomCode).emit('room:updated', getRoomPublicView(updatedRoom));
       io.to(roomCode).emit('room:player-left', { userId });
