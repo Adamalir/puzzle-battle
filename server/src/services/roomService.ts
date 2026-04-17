@@ -192,13 +192,11 @@ function initPlayerState(
       return { guesses: [], currentGuess: '', solved: false, failed: false };
     case 'star-battle': {
       const sb = puzzle as import('../types/index').StarBattlePuzzle;
-      // Pre-fill hints (locked stars) and initial marks (suggested dots)
+      // Pre-fill locked hint stars (hard mode only); everything else starts empty
       const grid = Array.from({ length: sb.size }, (_, r) =>
-        Array.from({ length: sb.size }, (_, c) => {
-          if (sb.hints?.[r]?.[c]) return 1;          // locked star hint
-          if (sb.initialMarks?.[r]?.[c]) return 2;   // pre-excluded dot
-          return 0;
-        })
+        Array.from({ length: sb.size }, (_, c) =>
+          sb.hints?.[r]?.[c] ? 1 : 0
+        )
       );
       return { grid, solved: false };
     }

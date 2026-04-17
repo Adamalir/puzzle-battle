@@ -922,29 +922,28 @@ export function generateStarBattle(difficulty: string, seed: string): StarBattle
         if (solution[r][c]) { rowC[r]++; colC[c]++; regC[regions[r][c]]++; }
     if (!rowC.every(v => v === k) || !colC.every(v => v === k) || !regC.every(v => v === k)) continue;
 
-    // Pick hints and check solvability with them pre-applied.
-    // Easy: 1 hint (starter star) reliably bridges the uniqueness gap.
-    // Medium: 4 hints bridge the larger uniqueness gap for k=2.
-    // Hard: 14 hints (~33% of 42 stars) needed since 14×14 k=3 puzzles are rarely
-    //       unique on their own; the remaining 28 stars are still logically deducible.
-    const numHints = difficulty === 'hard' ? 14 : difficulty === 'medium' ? 4 : 1;
-    const hints = numHints > 0 ? pickHints(size, solution, numHints, rng) : undefined;
+    // Hard mode: pre-place ~24% of stars as locked hints (8–10 of 42).
+    // Easy/medium: clean empty grid — player places everything themselves.
+    if (difficulty === 'hard') {
+      const numHints = Math.round(size * k * 0.24); // ~10 for 14×14×3
+      const hints = pickHints(size, solution, numHints, rng);
+      const { solved } = logicalSolve(size, k, regions, hints);
+      if (!solved) continue;
+      return { size, starsPerUnit: k, regions, solution, hints };
+    }
 
-    // Gate 1: puzzle must be logically solvable with the given hints
-    const { solved } = logicalSolve(size, k, regions, hints);
-    if (!solved) continue;
-
-    // Gate 2: puzzle must have at least one obvious starting move visible at load
-    const { dots, hasStartingMove } = computeInitialDots(size, k, regions, hints);
-    if (!hasStartingMove) continue;
-
-    return { size, starsPerUnit: k, regions, solution, hints, initialMarks: dots };
+    return { size, starsPerUnit: k, regions, solution };
   }
 
-  // Pre-computed valid fallbacks — add initial dots on the fly
+  // Pre-computed valid fallbacks
   const fb = difficulty === 'hard' ? FALLBACK_HARD : difficulty === 'medium' ? FALLBACK_MEDIUM : FALLBACK_EASY;
-  const { dots } = computeInitialDots(fb.size, fb.starsPerUnit, fb.regions, fb.hints);
-  return { ...fb, initialMarks: dots };
+  if (difficulty === 'hard') {
+    const rng = mulberry32(strToSeed(`${seed}:${difficulty}:fallback`));
+    const numHints = Math.round(fb.size * fb.starsPerUnit * 0.24);
+    const hints = pickHints(fb.size, fb.solution, numHints, rng);
+    return { ...fb, hints };
+  }
+  return fb;
 }
 
 // ── Validation ────────────────────────────────────────────────────────────────

@@ -131,11 +131,6 @@ export default function StarBattleGame({ room, userId, socket, isSpectator }: Pr
         <p className="text-sm text-gray-400 mt-1">
           Place {starsPerUnit} ★ per row, column &amp; region — stars cannot touch
         </p>
-        {puzzle.hints && (
-          <p className="text-xs text-amber-400 mt-0.5">
-            Gold ★ are hints and cannot be moved
-          </p>
-        )}
       </div>
 
       {/* Legend */}
@@ -236,6 +231,23 @@ export default function StarBattleGame({ room, userId, socket, isSpectator }: Pr
                       }}
                     >
                       ★
+                    </span>
+                  )}
+
+                  {/* Lock badge on hint stars */}
+                  {isHint && (
+                    <span
+                      style={{
+                        position:   'absolute',
+                        bottom:     2,
+                        right:      3,
+                        fontSize:   Math.round(cellPx * 0.22),
+                        lineHeight: 1,
+                        opacity:    0.7,
+                        pointerEvents: 'none',
+                      }}
+                    >
+                      🔒
                     </span>
                   )}
 
