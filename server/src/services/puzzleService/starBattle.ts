@@ -387,6 +387,7 @@ function logicalSolve(
   k: number,
   regions: number[][],
   preHints?: boolean[][],
+  pureOnly = false,
 ): { solved: boolean; initialMarks: boolean[][] } {
   const poss: boolean[][] = Array.from({ length: size }, () => new Array(size).fill(true));
   const conf: boolean[][] = Array.from({ length: size }, () => new Array(size).fill(false));
@@ -540,7 +541,7 @@ function logicalSolve(
       }
     }
 
-    // Rule 5: Subset confinement
+    // Rule 5: Subset confinement (single row/col)
     for (let r = 0; r < size; r++) {
       const rowNeed = k - rowSt[r];
       if (rowNeed <= 0) continue;
@@ -573,6 +574,125 @@ function logicalSolve(
         const cs = new Set(confinedRegs);
         for (let r = 0; r < size; r++)
           if (poss[r][c] && !conf[r][c] && !cs.has(regions[r][c])) excl(r, c);
+      }
+    }
+
+    // Rule 6: Pair-of-rows/cols subset confinement (Hall's theorem, n=2)
+    // If all available cells of a set of regions fall within 2 rows, and their
+    // combined star-need equals the combined capacity of those 2 rows, then no
+    // other region may place stars in those rows.
+    // This is the critical rule for k=2 (medium) puzzles without hints.
+    for (let r1 = 0; r1 < size - 1; r1++) {
+      const cap1 = k - rowSt[r1];
+      if (cap1 <= 0) continue;
+      for (let r2 = r1 + 1; r2 < size; r2++) {
+        const cap2 = k - rowSt[r2];
+        if (cap2 <= 0) continue;
+        const combinedCap = cap1 + cap2;
+        const confinedRegs: number[] = [];
+        let needSum = 0;
+        for (let reg = 0; reg < size; reg++) {
+          if (regSt[reg] >= k) continue;
+          const av = regCells[reg].filter(([r, c]) => poss[r][c] && !conf[r][c]);
+          if (av.length === 0) continue;
+          if (av.every(([r]) => r === r1 || r === r2)) {
+            confinedRegs.push(reg); needSum += k - regSt[reg];
+          }
+        }
+        if (needSum >= combinedCap && confinedRegs.length > 0) {
+          const cs = new Set(confinedRegs);
+          for (const row of [r1, r2]) {
+            for (let c = 0; c < size; c++)
+              if (poss[row][c] && !conf[row][c] && !cs.has(regions[row][c])) excl(row, c);
+          }
+        }
+      }
+    }
+    for (let c1 = 0; c1 < size - 1; c1++) {
+      const cap1 = k - colSt[c1];
+      if (cap1 <= 0) continue;
+      for (let c2 = c1 + 1; c2 < size; c2++) {
+        const cap2 = k - colSt[c2];
+        if (cap2 <= 0) continue;
+        const combinedCap = cap1 + cap2;
+        const confinedRegs: number[] = [];
+        let needSum = 0;
+        for (let reg = 0; reg < size; reg++) {
+          if (regSt[reg] >= k) continue;
+          const av = regCells[reg].filter(([r, c]) => poss[r][c] && !conf[r][c]);
+          if (av.length === 0) continue;
+          if (av.every(([, c]) => c === c1 || c === c2)) {
+            confinedRegs.push(reg); needSum += k - regSt[reg];
+          }
+        }
+        if (needSum >= combinedCap && confinedRegs.length > 0) {
+          const cs = new Set(confinedRegs);
+          for (const col of [c1, c2]) {
+            for (let r = 0; r < size; r++)
+              if (poss[r][col] && !conf[r][col] && !cs.has(regions[r][col])) excl(r, col);
+          }
+        }
+      }
+    }
+
+    // Rule 7: Unit adjacency elimination
+    // If placing a star at (r,c) would leave the unit with fewer than (need-1)
+    // surviving non-adjacent candidates, then (r,c) cannot be a star.
+    // This directly eliminates the "middle cell" of a 3-cell run when k=2,
+    // e.g. region has cells (0,0)(0,1)(0,2) and needs 2 stars: placing at (0,1)
+    // excludes (0,0) and (0,2), leaving 0 survivors < need-1=1 → exclude (0,1).
+    // After exclusion, Rule 2 forces the remaining cells as stars.
+
+    // 7a: Regions
+    for (let reg = 0; reg < size; reg++) {
+      const need = k - regSt[reg];
+      if (need <= 1) continue;
+      const av = regCells[reg].filter(([r, c]) => poss[r][c] && !conf[r][c]);
+      if (av.length <= need) continue; // Rule 2 handles this
+      for (const [r, c] of av) {
+        let surviving = 0;
+        for (const [r2, c2] of av) {
+          if (r2 === r && c2 === c) continue;
+          if (Math.abs(r2 - r) <= 1 && Math.abs(c2 - c) <= 1) continue;
+          surviving++;
+        }
+        if (surviving < need - 1) excl(r, c);
+      }
+    }
+
+    // 7b: Rows
+    for (let r = 0; r < size; r++) {
+      const need = k - rowSt[r];
+      if (need <= 1) continue;
+      const av: number[] = [];
+      for (let c = 0; c < size; c++) if (poss[r][c] && !conf[r][c]) av.push(c);
+      if (av.length <= need) continue;
+      for (const c of av) {
+        let surviving = 0;
+        for (const c2 of av) {
+          if (c2 === c) continue;
+          if (Math.abs(c2 - c) <= 1) continue;
+          surviving++;
+        }
+        if (surviving < need - 1) excl(r, c);
+      }
+    }
+
+    // 7c: Columns
+    for (let c = 0; c < size; c++) {
+      const need = k - colSt[c];
+      if (need <= 1) continue;
+      const av: number[] = [];
+      for (let r = 0; r < size; r++) if (poss[r][c] && !conf[r][c]) av.push(r);
+      if (av.length <= need) continue;
+      for (const r of av) {
+        let surviving = 0;
+        for (const r2 of av) {
+          if (r2 === r) continue;
+          if (Math.abs(r2 - r) <= 1) continue;
+          surviving++;
+        }
+        if (surviving < need - 1) excl(r, c);
       }
     }
   }
@@ -621,6 +741,9 @@ function logicalSolve(
     while (progress) { applyRules(); progress = anyChange; }
     if (isSolved()) return { solved: true, initialMarks };
     if (!feasible()) return { solved: false, initialMarks };
+    // pureOnly = true: do not use trial elimination — the solver must finish
+    // using rules 1-8 alone.  If it stalls, the puzzle is rejected.
+    if (pureOnly) break;
     if (trialElimination()) continue;
     break;
   }
@@ -894,16 +1017,20 @@ const FALLBACK_EASY: StarBattlePuzzle = {
 };
 
 const FALLBACK_MEDIUM: StarBattlePuzzle = {
+  // Pure-logic solvable (verified with Rules 1-7, no trial elimination needed).
+  // Top-left strip: row 0, cols 0-2 (region 0). Bottom-right strip: row 9, cols 7-9 (region 1).
   size: 10, starsPerUnit: 2,
-  regions: [[0,0,0,9,9,7,7,7,7,7],[9,9,9,9,9,7,7,7,7,7],[9,9,9,9,9,2,2,7,7,7],[9,9,9,2,2,2,2,2,7,7],[5,5,9,2,4,2,2,6,6,6],[5,5,5,2,4,4,2,6,6,6],[5,5,4,4,4,4,4,6,6,6],[5,5,3,3,4,4,4,6,8,8],[3,3,3,3,3,8,8,8,8,8],[3,3,3,3,3,8,8,1,1,1]],
-  solution: [[true,false,true,false,false,false,false,false,false,false],[false,false,false,false,true,false,true,false,false,false],[false,true,false,false,false,false,false,false,true,false],[false,false,false,true,false,true,false,false,false,false],[false,false,false,false,false,false,false,true,false,true],[false,false,true,false,true,false,false,false,false,false],[true,false,false,false,false,false,true,false,false,false],[false,false,false,true,false,false,false,false,true,false],[false,true,false,false,false,true,false,false,false,false],[false,false,false,false,false,false,false,true,false,true]],
+  regions: [[0,0,0,3,3,7,7,7,7,6],[2,2,3,3,3,7,7,7,6,6],[2,2,2,3,3,3,3,6,6,6],[2,2,2,2,2,9,3,6,6,6],[2,2,2,2,2,9,9,9,6,6],[5,5,9,9,9,9,9,8,8,8],[5,5,5,9,9,9,8,8,8,8],[5,5,5,4,4,8,8,8,8,8],[5,5,5,4,4,4,4,4,8,8],[5,5,5,4,4,4,4,1,1,1]],
+  solution: [[true,false,true,false,false,false,false,false,false,false],[false,false,false,false,false,true,false,true,false,false],[false,false,false,true,false,false,false,false,false,true],[false,true,false,false,false,false,true,false,false,false],[false,false,false,false,true,false,false,false,true,false],[true,false,true,false,false,false,false,false,false,false],[false,false,false,false,true,false,true,false,false,false],[false,true,false,false,false,false,false,false,true,false],[false,false,false,true,false,true,false,false,false,false],[false,false,false,false,false,false,false,true,false,true]],
 };
 
 const FALLBACK_HARD: StarBattlePuzzle = {
+  // Pure-logic solvable with 16 hints (verified with Rules 1-7, no trial elimination needed).
+  // Top-left strip: row 0, cols 0-4 (region 0). Bottom-right strip: row 13, cols 9-13 (region 1).
   size: 14, starsPerUnit: 3,
-  regions: [[0,0,0,0,0,11,11,2,2,2,2,2,2,4],[9,9,9,9,11,11,11,11,2,2,2,2,4,4],[9,9,9,9,11,11,11,11,11,2,2,4,4,4],[9,9,9,9,11,11,11,11,11,2,2,4,4,4],[13,9,9,9,9,7,7,7,7,4,4,4,4,4],[13,13,13,9,9,7,7,7,7,5,5,5,5,4],[13,13,13,13,7,7,7,7,7,5,5,5,5,5],[13,12,12,12,7,7,7,7,6,5,10,10,5,5],[13,12,12,12,12,7,6,6,6,10,10,10,10,5],[12,12,12,12,12,3,6,6,6,6,10,10,10,5],[12,12,12,3,3,3,6,6,6,6,10,10,10,10],[12,12,3,3,3,3,8,8,6,8,10,10,10,10],[3,3,3,3,3,8,8,8,8,8,8,8,8,8],[3,3,3,3,3,8,8,8,8,1,1,1,1,1]],
-  solution: [[true,false,true,false,true,false,false,false,false,false,false,false,false,false],[false,false,false,false,false,false,false,false,true,false,true,false,true,false],[false,true,false,false,true,false,true,false,false,false,false,false,false,false],[false,false,false,false,false,false,false,false,true,false,true,false,true,false],[false,false,true,false,true,false,true,false,false,false,false,false,false,false],[true,false,false,false,false,false,false,false,false,true,false,false,false,true],[false,false,true,false,false,true,false,true,false,false,false,false,false,false],[true,false,false,false,false,false,false,false,false,false,true,false,true,false],[false,false,false,true,false,false,true,false,true,false,false,false,false,false],[false,true,false,false,false,false,false,false,false,false,false,true,false,true],[false,false,false,true,false,true,false,true,false,false,false,false,false,false],[false,true,false,false,false,false,false,false,false,true,false,true,false,false],[false,false,false,true,false,true,false,true,false,false,false,false,false,false],[false,false,false,false,false,false,false,false,false,true,false,true,false,true]],
-  hints: [[true,false,false,false,false,false,false,false,false,false,false,false,false,false],[false,false,false,false,false,false,false,false,false,false,false,false,false,false],[false,false,false,false,false,false,true,false,false,false,false,false,false,false],[false,false,false,false,false,false,false,false,true,false,false,false,false,false],[false,false,true,false,false,false,false,false,false,false,false,false,false,false],[false,false,false,false,false,false,false,false,false,false,false,false,false,false],[false,false,true,false,false,true,false,false,false,false,false,false,false,false],[true,false,false,false,false,false,false,false,false,false,false,false,false,false],[false,false,false,true,false,false,true,false,true,false,false,false,false,false],[false,false,false,false,false,false,false,false,false,false,false,true,false,false],[false,false,false,false,false,true,false,false,false,false,false,false,false,false],[false,false,false,false,false,false,false,false,false,false,false,false,false,false],[false,false,false,false,false,false,false,true,false,false,false,false,false,false],[false,false,false,false,false,false,false,false,false,false,false,true,false,false]],
+  regions: [[0,0,0,0,0,10,10,10,10,4,4,4,4,4],[5,5,5,5,10,10,10,10,10,4,4,4,4,4],[13,5,5,5,10,10,10,10,10,4,4,4,4,4],[13,13,5,5,5,5,10,12,12,12,4,4,4,4],[13,5,5,5,11,11,11,12,12,6,6,4,4,4],[13,5,5,5,11,11,12,12,12,6,6,2,2,2],[13,13,13,13,11,11,12,12,12,6,6,2,2,2],[13,13,13,11,11,11,12,12,12,6,2,2,2,2],[7,7,11,11,11,11,6,6,6,6,2,2,3,3],[7,7,7,7,7,9,9,8,8,2,2,2,3,3],[7,7,7,9,9,9,8,8,8,8,3,3,3,3],[7,7,7,9,9,9,8,8,8,8,3,3,3,3],[7,7,7,9,9,9,9,8,8,8,8,3,3,3],[7,9,9,9,9,9,8,8,8,1,1,1,1,1]],
+  solution: [[true,false,true,false,true,false,false,false,false,false,false,false,false,false],[false,false,false,false,false,false,true,false,true,false,false,false,false,true],[false,true,false,true,false,false,false,false,false,false,true,false,false,false],[false,false,false,false,false,false,true,false,true,false,false,false,true,false],[false,false,true,false,true,false,false,false,false,false,true,false,false,false],[true,false,false,false,false,false,false,true,false,false,false,false,true,false],[false,false,false,true,false,true,false,false,false,true,false,false,false,false],[false,true,false,false,false,false,false,true,false,false,false,true,false,false],[false,false,false,false,false,true,false,false,false,true,false,false,false,true],[true,false,true,false,false,false,false,false,false,false,false,true,false,false],[false,false,false,false,true,false,true,false,true,false,false,false,false,false],[false,true,false,false,false,false,false,false,false,false,true,false,true,false],[false,false,false,true,false,true,false,true,false,false,false,false,false,false],[false,false,false,false,false,false,false,false,false,true,false,true,false,true]],
+  hints: [[false,false,false,false,true,false,false,false,false,false,false,false,false,false],[false,false,false,false,false,false,false,false,true,false,false,false,false,true],[false,true,false,true,false,false,false,false,false,false,false,false,false,false],[false,false,false,false,false,false,false,false,false,false,false,false,false,false],[false,false,false,false,false,false,false,false,false,false,true,false,false,false],[true,false,false,false,false,false,false,true,false,false,false,false,false,false],[false,false,false,false,false,false,false,false,false,false,false,false,false,false],[false,false,false,false,false,false,false,false,false,false,false,true,false,false],[false,false,false,false,false,false,false,false,false,true,false,false,false,false],[true,false,false,false,false,false,false,false,false,false,false,true,false,false],[false,false,false,false,false,false,false,false,false,false,false,false,false,false],[false,false,false,false,false,false,false,false,false,false,true,false,false,false],[false,false,false,true,false,false,false,true,false,false,false,false,false,false],[false,false,false,false,false,false,false,false,false,false,false,false,false,true]],
 };
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -916,14 +1043,16 @@ export function generateStarBattle(difficulty: string, seed: string): StarBattle
     default:     size = 10; k = 2; break;
   }
 
-  // Generation attempt limits — each attempt is fast, so we can afford many.
-  // If no puzzle found within the budget, the fallback is returned.
-  const maxAttempts = difficulty === 'easy' ? 2000 : difficulty === 'medium' ? 3000 : 1500;
+  // Generation attempt limits.
+  // Requiring pure-logic solvability (no trial elimination) is a stricter filter,
+  // so the budget is higher than before to maintain a good acceptance rate.
+  // Each region+star attempt is fast; the solver runs in < 1 ms per attempt.
+  const maxAttempts = difficulty === 'easy' ? 5000 : difficulty === 'medium' ? 8000 : 3000;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const rng = mulberry32(strToSeed(`${seed}:${difficulty}:${attempt}`));
 
-    // Step 1: grow regions with forced corner + edge-strip shapes
+    // Step 1: grow regions with two hardcoded tiny forcing strips + random Voronoi
     const regions = growRegions(size, k, rng);
     if (!regions) continue;
     if (countForcingRegions(size, k, regions) < 2) continue; // sanity check
@@ -941,17 +1070,30 @@ export function generateStarBattle(difficulty: string, seed: string): StarBattle
         if (solution[r][c]) { rowC[r]++; colC[c]++; regC[regions[r][c]]++; }
     if (!rowC.every(v => v === k) || !colC.every(v => v === k) || !regC.every(v => v === k)) continue;
 
-    // Step 3+4: logical solvability gate.
-    // Hard: pre-place ~24% of stars as locked hints shown to the player.
-    // Easy/medium: no hints; the corner+edge forcing regions must carry the solve.
+    // Step 3: Pure-logic solvability gate — no trial elimination / guessing.
+    // The solver must complete the entire puzzle using only constraint propagation
+    // (rules 1-8 + pair/unit-adjacency: forced placement, saturation, confinement, Hall's).
+    // If it stalls at any point without placing all stars, the puzzle is rejected.
+    //
+    // Hard: adaptively add hints from the solution until the pure-logic solver can finish,
+    //   starting at 33% and adding 2 more each round, up to 50%.  We expose the minimum
+    //   number of hints needed — puzzles that need ≤50% hints feel challenging but fair.
+    // Easy/medium: no hints; the two tiny forcing strips must carry the full solve.
     if (difficulty === 'hard') {
-      const numHints = Math.round(size * k * 0.33); // ~14 of 42 stars (needed for solver to succeed)
-      const hints    = pickHints(size, solution, numHints, rng);
-      const { solved } = logicalSolve(size, k, regions, hints);
-      if (!solved) continue;
+      const totalStars = size * k; // 42 for 14×14 k=3
+      const minHints = Math.round(totalStars * 0.33); // start at ~14
+      const maxHints = Math.round(totalStars * 0.50); // cap at ~21
+      let hints = pickHints(size, solution, minHints, rng);
+      let accepted = false;
+      for (let nh = minHints; nh <= maxHints; nh += 2) {
+        hints = pickHints(size, solution, nh, rng);
+        const { solved } = logicalSolve(size, k, regions, hints, /* pureOnly */ true);
+        if (solved) { accepted = true; break; }
+      }
+      if (!accepted) continue;
       return { size, starsPerUnit: k, regions, solution, hints };
     } else {
-      const { solved } = logicalSolve(size, k, regions);
+      const { solved } = logicalSolve(size, k, regions, undefined, /* pureOnly */ true);
       if (!solved) continue;
       return { size, starsPerUnit: k, regions, solution };
     }
