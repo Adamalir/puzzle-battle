@@ -31,21 +31,22 @@ const DIRS8: [number, number][] = [
   [-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1],
 ];
 
-// ── Step 1: Region generation with guaranteed corner + edge forcing shapes ────
+// ── Step 1: Region generation with two guaranteed tiny forcing strips ──────────
 //
-// Two forcing region types are pre-planted before random Voronoi fills the rest:
+// Before any random Voronoi growth, two hardcoded tiny regions are planted:
 //
-//   CORNER regions — k+1 cells anchored at a grid corner (L-shape or straight).
-//     Player sees a tiny region; with one row/col exclusion the star is forced.
+//   Region 0 — TOP-LEFT:    row 0,      cols 0 … forcingSize-1
+//   Region 1 — BOTTOM-RIGHT: row size-1, cols size-forcingSize … size-1
 //
-//   EDGE-STRIP region — exactly k adjacent rows (or k cols) along a grid edge,
-//     k+2 to 2k cells wide.  rowSpan = k → confinement rule fires immediately,
-//     eliminating those rows from every other region's candidates.
+// forcingSize = max(2, 2k-1): minimum straight-line length that can hold k
+// non-adjacent stars (alternating pattern).
+//   k=1 (easy  8×8):  2 cells — star must be in col 0 or col 1. Instantly obvious.
+//   k=2 (medium 10×10): 3 cells — stars at cols {0,2}; only one valid arrangement.
+//   k=3 (hard 14×14):  5 cells — stars at cols {0,2,4}; immediately constraining.
 //
-// numCornerRegions = 2 for k≤2 (easy/medium), 1 for k≥3 (hard).
-// Always 1 edge-strip region regardless of difficulty.
-// Remaining n - numForcing regions fill via unbiased random Voronoi (Phase 3),
-// producing organic irregular shapes rather than uniform blobs.
+// These two regions are ALWAYS planted regardless of difficulty or seed.
+// Remaining n-2 regions fill via unbiased random Voronoi (Phase 2-3),
+// producing organic irregular shapes for the rest of the board.
 
 function growRegions(size: number, k: number, rng: () => number): number[][] | null {
   const n = size;
@@ -94,87 +95,28 @@ function growRegions(size: number, k: number, rng: () => number): number[][] | n
     return null;
   }
 
-  // ── Phase 1A: Corner-strip regions (k ≤ 2 only) ─────────────────────────────
-  // A straight strip of k+2 cells along one edge of a grid corner.
-  // Example for k=1: (0,0)→(0,1)→(0,2) — 3 cells; 1 star forced once a row/col used.
-  // Example for k=2: (0,0)→(0,1)→(0,2)→(0,3) — 4 cells; stars at (0,0)&(0,2) etc.
+  // ── Phase 1: Two hardcoded tiny forcing regions (ALWAYS planted first) ────────
   //
-  // WHY straight-line only: L-shaped corners with k+2 cells cannot hold k non-adjacent
-  // stars (every cell pair is within 8-directional reach), so placeStarsRowByRow fails.
-  // k=3 corner regions need ≥7 cells to hold 3 non-adjacent stars — too large to look
-  // like a "corner" — so we skip corners for k≥3 and use two edge strips instead.
-  if (k <= 2) {
-    const cornerTarget = k + 2; // straight strip of k+2 cells from corner
-    const cornerList   = shuffle<[number, number]>(
-      [[0, 0], [0, size - 1], [size - 1, 0], [size - 1, size - 1]], rng,
-    );
+  // forcingSize = max(2, 2k-1): smallest straight-line strip that can hold k stars.
+  const forcingSize = Math.max(2, 2 * k - 1);
 
-    for (let ci = 0; ci < 2; ci++) {
-      const [cr, cc] = cornerList[ci];
-      const reg = nextReg++;
-      addCell(reg, cr, cc);
-      seeds.push([cr, cc]);
-
-      // Grow in ONE direction only (horizontal or vertical) along the corner edge.
-      const horizontal = rng() < 0.5;
-      const dirR = horizontal ? 0 : (cr === 0 ? 1 : -1);
-      const dirC = horizontal ? (cc === 0 ? 1 : -1) : 0;
-
-      for (let step = 1; step < cornerTarget; step++) {
-        const nr = cr + dirR * step;
-        const nc = cc + dirC * step;
-        if (nr < 0 || nr >= size || nc < 0 || nc >= size) break;
-        if (regions[nr][nc] !== -1) break; // blocked by another region
-        addCell(reg, nr, nc);
-      }
-      if (regSize[reg] < k + 1) return null; // not enough room for k stars
-    }
+  // Region 0 — top-left: row 0, cols 0 to forcingSize-1
+  {
+    const reg = nextReg++;
+    for (let c = 0; c < forcingSize; c++) addCell(reg, 0, c);
+    seeds.push([0, Math.floor(forcingSize / 2)]);
   }
 
-  // ── Phase 1B: Edge-strip region(s) ───────────────────────────────────────────
-  // A strip confined to exactly k adjacent rows (or k cols) along a grid edge.
-  // rowSpan = k  ⟹  the confinement rule fires immediately (those k rows are "used").
-  //
-  // k ≤ 2: 1 strip (complements the 2 corner regions).
-  // k = 3: 2 strips (replaces corners entirely — one row-strip, one col-strip).
-  //        Two strips give the player two immediate logical footholds on hard puzzles.
-  const numEdgeStrips = k >= 3 ? 2 : 1;
-  const edgeChoices   = shuffle<'top' | 'bottom' | 'left' | 'right'>(
-    ['top', 'bottom', 'left', 'right'], rng,
-  );
-
-  for (let si = 0; si < numEdgeStrips; si++) {
-    const edgeReg = nextReg++;
-    const edge    = edgeChoices[si];
-    const minW = k + 2; // free-dimension width: enough for k non-adjacent stars + gaps
-    const maxW = k + 4;
-    const w    = minW + Math.floor(rng() * (maxW - minW + 1));
-
-    if (edge === 'top' || edge === 'bottom') {
-      const rowStart = edge === 'top' ? 0 : size - k;
-      const maxCS = size - w;
-      if (maxCS < 0) return null;
-      const cStart = Math.floor(rng() * (maxCS + 1));
-      for (let r = rowStart; r < rowStart + k; r++)
-        for (let c = cStart; c < cStart + w; c++)
-          if (r >= 0 && r < size && c >= 0 && c < size && regions[r][c] === -1)
-            addCell(edgeReg, r, c);
-      seeds.push([rowStart + Math.floor(k / 2), cStart + Math.floor(w / 2)]);
-    } else {
-      const colStart = edge === 'left' ? 0 : size - k;
-      const maxRS = size - w;
-      if (maxRS < 0) return null;
-      const rStart = Math.floor(rng() * (maxRS + 1));
-      for (let r = rStart; r < rStart + w; r++)
-        for (let c = colStart; c < colStart + k; c++)
-          if (r >= 0 && r < size && c >= 0 && c < size && regions[r][c] === -1)
-            addCell(edgeReg, r, c);
-      seeds.push([rStart + Math.floor(w / 2), colStart + Math.floor(k / 2)]);
-    }
-    if (regSize[edgeReg] < k + 1) return null; // too few cells
+  // Region 1 — bottom-right: last row, last forcingSize cols
+  {
+    const reg = nextReg++;
+    const lastRow = size - 1;
+    const cStart  = size - forcingSize;
+    for (let c = cStart; c < size; c++) addCell(reg, lastRow, c);
+    seeds.push([lastRow, cStart + Math.floor(forcingSize / 2)]);
   }
 
-  const numForcing = nextReg; // forcing regions: indices 0..numForcing-1
+  const numForcing = nextReg; // = 2; indices 0..1 are the tiny forcing strips
 
   // ── Phase 2: spread seeds for remaining regions ────────────────────────────
   for (let reg = numForcing; reg < n; reg++) {
@@ -245,10 +187,13 @@ function growRegions(size: number, k: number, rng: () => number): number[][] | n
   }
 
   // ── Phase 4: flood-fill orphaned cells ────────────────────────────────────────
-  // CRITICAL: never expand a forcing region in a way that destroys its property.
-  // A forcing region remains forcing as long as any one of these holds:
-  //   size ≤ k+2  |  rowSpan ≤ k  |  colSpan ≤ k
+  // CRITICAL: the two tiny forcing strips (reg 0 and 1) must stay confined to
+  // their single row — never let Phase 4 expand them into adjacent rows.
+  // For other forcing regions (none exist here, but guard generically), preserve
+  // the standard forcing property: size≤k+2 OR rowSpan≤k OR colSpan≤k.
   function canAddToForcing(reg: number, nr: number, nc: number): boolean {
+    // Tiny row-strips: only allow cells in the exact same row
+    if (reg < numForcing) return nr === regMinRow[reg];
     const newRowSpan = Math.max(regMaxRow[reg], nr) - Math.min(regMinRow[reg], nr) + 1;
     const newColSpan = Math.max(regMaxCol[reg], nc) - Math.min(regMinCol[reg], nc) + 1;
     const newSize    = regSize[reg] + 1;
@@ -325,13 +270,14 @@ function growRegions(size: number, k: number, rng: () => number): number[][] | n
     }
   }
 
-  // ── Post-validate: forcing regions must still be forcing ──────────────────────
-  // If Phase 4 had to expand a forcing region beyond its property, discard this
-  // attempt entirely rather than return a puzzle with no obvious starting moves.
+  // ── Post-validate: tiny forcing strips must be intact ─────────────────────────
+  // Each of the two hardcoded strips must still occupy exactly one row and must
+  // not have grown beyond forcingSize+1 cells (at most one orphan absorbed).
+  // If Phase 4 violated either constraint, discard and retry.
   for (let reg = 0; reg < numForcing; reg++) {
     const rowSpan = regMaxRow[reg] - regMinRow[reg] + 1;
-    const colSpan = regMaxCol[reg] - regMinCol[reg] + 1;
-    if (regSize[reg] > k + 2 && rowSpan > k && colSpan > k) return null;
+    if (rowSpan > 1) return null;                    // escaped its row
+    if (regSize[reg] > forcingSize + 1) return null; // grew too large
   }
 
   return regions;
@@ -943,20 +889,21 @@ export function _debugSolve(size: number, k: number, regions: number[][]): {
 
 const FALLBACK_EASY: StarBattlePuzzle = {
   size: 8, starsPerUnit: 1,
-  regions: [[4,4,4,4,4,1,1,1],[4,4,4,4,4,4,4,4],[2,4,4,4,4,4,4,4],[2,5,5,5,5,5,5,5],[2,5,5,5,3,7,7,7],[2,5,5,5,3,3,7,7],[2,3,3,3,3,6,7,7],[0,0,0,6,6,6,6,6]],
-  solution: [[false,false,false,false,false,false,true,false],[false,false,false,true,false,false,false,false],[true,false,false,false,false,false,false,false],[false,false,true,false,false,false,false,false],[false,false,false,false,true,false,false,false],[false,false,false,false,false,false,false,true],[false,false,false,false,false,true,false,false],[false,true,false,false,false,false,false,false]],
+  regions: [[0,0,5,5,5,5,5,5],[2,2,2,2,2,2,5,7],[4,4,4,2,2,7,7,7],[4,4,4,2,2,7,7,7],[4,6,6,6,6,6,6,6],[6,6,6,6,6,3,3,3],[6,6,6,3,3,3,3,3],[3,3,3,3,3,3,1,1]],
+  solution: [[false,true,false,false,false,false,false,false],[false,false,false,false,false,false,true,false],[false,false,false,true,false,false,false,false],[false,false,false,false,false,true,false,false],[true,false,false,false,false,false,false,false],[false,false,true,false,false,false,false,false],[false,false,false,false,true,false,false,false],[false,false,false,false,false,false,false,true]],
 };
 
 const FALLBACK_MEDIUM: StarBattlePuzzle = {
   size: 10, starsPerUnit: 2,
-  regions: [[3,2,2,2,2,2,0,0,0,0],[3,3,2,2,2,2,2,2,2,9],[3,3,6,6,6,6,6,9,9,9],[3,3,3,6,3,6,6,6,9,9],[3,3,3,3,3,6,6,4,9,9],[3,3,3,5,3,4,4,4,4,4],[5,5,5,5,3,8,4,4,4,4],[5,5,5,5,8,8,8,8,4,7],[5,5,5,5,8,8,7,7,7,7],[1,1,1,1,8,8,7,7,7,7]],
-  solution: [[false,false,false,false,false,false,true,false,true,false],[false,false,true,false,true,false,false,false,false,false],[true,false,false,false,false,false,false,false,true,false],[false,false,false,true,false,true,false,false,false,false],[false,false,false,false,false,false,false,true,false,true],[false,true,false,true,false,false,false,false,false,false],[false,false,false,false,false,true,false,true,false,false],[false,true,false,false,false,false,false,false,false,true],[false,false,false,false,true,false,true,false,false,false],[true,false,true,false,false,false,false,false,false,false]],
+  regions: [[0,0,0,9,9,7,7,7,7,7],[9,9,9,9,9,7,7,7,7,7],[9,9,9,9,9,2,2,7,7,7],[9,9,9,2,2,2,2,2,7,7],[5,5,9,2,4,2,2,6,6,6],[5,5,5,2,4,4,2,6,6,6],[5,5,4,4,4,4,4,6,6,6],[5,5,3,3,4,4,4,6,8,8],[3,3,3,3,3,8,8,8,8,8],[3,3,3,3,3,8,8,1,1,1]],
+  solution: [[true,false,true,false,false,false,false,false,false,false],[false,false,false,false,true,false,true,false,false,false],[false,true,false,false,false,false,false,false,true,false],[false,false,false,true,false,true,false,false,false,false],[false,false,false,false,false,false,false,true,false,true],[false,false,true,false,true,false,false,false,false,false],[true,false,false,false,false,false,true,false,false,false],[false,false,false,true,false,false,false,false,true,false],[false,true,false,false,false,true,false,false,false,false],[false,false,false,false,false,false,false,true,false,true]],
 };
 
 const FALLBACK_HARD: StarBattlePuzzle = {
   size: 14, starsPerUnit: 3,
-  regions: [[13,13,13,13,13,2,2,2,3,5,5,5,5,5],[13,13,13,2,13,2,2,2,3,3,3,5,5,5],[1,1,1,2,2,2,2,3,3,3,3,5,5,5],[1,1,1,2,2,2,2,2,4,3,3,3,5,5],[1,1,1,2,4,4,4,4,4,3,3,0,0,0],[1,1,1,4,4,4,4,4,10,10,3,0,0,0],[1,1,1,7,6,4,4,10,10,8,8,0,0,0],[1,1,1,7,6,4,10,10,10,8,8,0,0,0],[1,1,1,7,6,6,6,10,10,8,8,0,0,0],[7,7,7,7,6,6,6,6,6,8,8,0,0,0],[11,11,7,7,7,12,12,6,6,8,8,8,8,8],[11,11,7,7,7,12,12,12,12,9,9,9,9,9],[11,11,11,11,12,12,12,12,12,9,9,9,9,9],[11,11,11,11,11,12,12,12,12,9,9,9,9,9]],
-  solution: [[true,false,false,false,false,false,false,false,false,false,true,false,true,false],[false,false,true,false,true,false,false,true,false,false,false,false,false,false],[true,false,false,false,false,false,false,false,false,true,false,false,false,true],[false,false,false,true,false,true,false,false,false,false,false,true,false,false],[false,false,false,false,false,false,false,true,false,true,false,false,false,true],[false,true,false,true,false,true,false,false,false,false,false,false,false,false],[false,false,false,false,false,false,false,false,true,false,true,false,true,false],[false,false,true,false,true,false,true,false,false,false,false,false,false,false],[false,false,false,false,false,false,false,false,true,false,true,false,true,false],[true,false,true,false,false,false,true,false,false,false,false,false,false,false],[false,false,false,false,true,false,false,false,true,false,false,true,false,false],[false,true,false,false,false,false,true,false,false,false,false,false,false,true],[false,false,false,true,false,false,false,false,false,true,false,true,false,false],[false,true,false,false,false,true,false,true,false,false,false,false,false,false]],
+  regions: [[0,0,0,0,0,11,11,2,2,2,2,2,2,4],[9,9,9,9,11,11,11,11,2,2,2,2,4,4],[9,9,9,9,11,11,11,11,11,2,2,4,4,4],[9,9,9,9,11,11,11,11,11,2,2,4,4,4],[13,9,9,9,9,7,7,7,7,4,4,4,4,4],[13,13,13,9,9,7,7,7,7,5,5,5,5,4],[13,13,13,13,7,7,7,7,7,5,5,5,5,5],[13,12,12,12,7,7,7,7,6,5,10,10,5,5],[13,12,12,12,12,7,6,6,6,10,10,10,10,5],[12,12,12,12,12,3,6,6,6,6,10,10,10,5],[12,12,12,3,3,3,6,6,6,6,10,10,10,10],[12,12,3,3,3,3,8,8,6,8,10,10,10,10],[3,3,3,3,3,8,8,8,8,8,8,8,8,8],[3,3,3,3,3,8,8,8,8,1,1,1,1,1]],
+  solution: [[true,false,true,false,true,false,false,false,false,false,false,false,false,false],[false,false,false,false,false,false,false,false,true,false,true,false,true,false],[false,true,false,false,true,false,true,false,false,false,false,false,false,false],[false,false,false,false,false,false,false,false,true,false,true,false,true,false],[false,false,true,false,true,false,true,false,false,false,false,false,false,false],[true,false,false,false,false,false,false,false,false,true,false,false,false,true],[false,false,true,false,false,true,false,true,false,false,false,false,false,false],[true,false,false,false,false,false,false,false,false,false,true,false,true,false],[false,false,false,true,false,false,true,false,true,false,false,false,false,false],[false,true,false,false,false,false,false,false,false,false,false,true,false,true],[false,false,false,true,false,true,false,true,false,false,false,false,false,false],[false,true,false,false,false,false,false,false,false,true,false,true,false,false],[false,false,false,true,false,true,false,true,false,false,false,false,false,false],[false,false,false,false,false,false,false,false,false,true,false,true,false,true]],
+  hints: [[true,false,false,false,false,false,false,false,false,false,false,false,false,false],[false,false,false,false,false,false,false,false,false,false,false,false,false,false],[false,false,false,false,false,false,true,false,false,false,false,false,false,false],[false,false,false,false,false,false,false,false,true,false,false,false,false,false],[false,false,true,false,false,false,false,false,false,false,false,false,false,false],[false,false,false,false,false,false,false,false,false,false,false,false,false,false],[false,false,true,false,false,true,false,false,false,false,false,false,false,false],[true,false,false,false,false,false,false,false,false,false,false,false,false,false],[false,false,false,true,false,false,true,false,true,false,false,false,false,false],[false,false,false,false,false,false,false,false,false,false,false,true,false,false],[false,false,false,false,false,true,false,false,false,false,false,false,false,false],[false,false,false,false,false,false,false,false,false,false,false,false,false,false],[false,false,false,false,false,false,false,true,false,false,false,false,false,false],[false,false,false,false,false,false,false,false,false,false,false,true,false,false]],
 };
 
 // ── Public API ────────────────────────────────────────────────────────────────
