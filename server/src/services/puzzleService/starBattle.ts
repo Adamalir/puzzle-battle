@@ -31,22 +31,21 @@ const DIRS8: [number, number][] = [
   [-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1],
 ];
 
-// ── Step 1: Region generation with guaranteed forcing shapes ─────────────────
+// ── Step 1: Region generation with guaranteed corner + edge forcing shapes ────
 //
-// A "forcing region" gives players an immediate logical foothold:
+// Two forcing region types are pre-planted before random Voronoi fills the rest:
 //
-//   Small       — ≤ k+2 cells total (players see at a glance where stars go)
-//   Row-confined — all cells in ≤ k rows (confinement rule fires at once)
-//   Col-confined — all cells in ≤ k cols
+//   CORNER regions — k+1 cells anchored at a grid corner (L-shape or straight).
+//     Player sees a tiny region; with one row/col exclusion the star is forced.
 //
-// Phase 1 pre-plants numForcing such regions grown within a tight row span.
-// The remaining regions are filled with unbiased random Voronoi (Phase 3),
-// producing organic irregular shapes — arms and protrusions rather than blobs.
+//   EDGE-STRIP region — exactly k adjacent rows (or k cols) along a grid edge,
+//     k+2 to 2k cells wide.  rowSpan = k → confinement rule fires immediately,
+//     eliminating those rows from every other region's candidates.
 //
-// Forcing-region target sizes are chosen so k non-adjacent stars can always fit:
-//   k=1 → 2–3 cells in 1 row   (a domino or tromino)
-//   k=2 → 4–6 cells in 2 rows  (small tetromino / pentomino)
-//   k=3 → 8–10 cells in 2 rows (wide enough for 3 stars with gaps)
+// numCornerRegions = 2 for k≤2 (easy/medium), 1 for k≥3 (hard).
+// Always 1 edge-strip region regardless of difficulty.
+// Remaining n - numForcing regions fill via unbiased random Voronoi (Phase 3),
+// producing organic irregular shapes rather than uniform blobs.
 
 function growRegions(size: number, k: number, rng: () => number): number[][] | null {
   const n = size;
@@ -58,6 +57,7 @@ function growRegions(size: number, k: number, rng: () => number): number[][] | n
   const regMaxCol = new Array(n).fill(-1);
 
   const seeds: [number, number][] = [];
+  let nextReg = 0;
 
   function addCell(reg: number, r: number, c: number): void {
     regions[r][c] = reg;
@@ -68,19 +68,8 @@ function growRegions(size: number, k: number, rng: () => number): number[][] | n
     if (c > regMaxCol[reg]) regMaxCol[reg] = c;
   }
 
-  // Forcing parameters by difficulty (indexed by k)
-  const numForcing  = k >= 3 ? 2 : 3;
-  const maxRowSpanF = k === 1 ? 1 : 2;
-  // Target cell count: large enough that k non-adjacent stars can always fit
-  // within the 2-row span, small enough to look constraining to the player.
-  //   k=1: 2–3 cells  k=2: 4–6 cells  k=3: 8–10 cells
-  const forceMin = k === 1 ? 2 : k === 2 ? 4 : 8;
-  const forceMax = k === 1 ? 3 : k === 2 ? 6 : 10;
+  const minSeedSep = Math.max(2, Math.floor(size / Math.sqrt(n)));
 
-  const minForceSep = Math.max(3, Math.floor(size / (numForcing + 1)));
-  const minSeedSep  = Math.max(2, Math.floor(size / Math.sqrt(n)));
-
-  // Random cell sampler: try up to `trials` random positions before scanning
   function pickFreeCell(minSep: number, trials = 8000): [number, number] | null {
     for (let t = 0; t < trials; t++) {
       const r = Math.floor(rng() * size);
@@ -91,7 +80,6 @@ function growRegions(size: number, k: number, rng: () => number): number[][] | n
         if (Math.abs(r - sr) + Math.abs(c - sc) < minSep) { ok = false; break; }
       if (ok) return [r, c];
     }
-    // Linear scan fallback (relax distance by 1 each pass)
     for (let sep = minSep - 1; sep >= 1; sep--) {
       for (let r = 0; r < size; r++) {
         for (let c = 0; c < size; c++) {
@@ -106,37 +94,89 @@ function growRegions(size: number, k: number, rng: () => number): number[][] | n
     return null;
   }
 
-  // ── Phase 1: pre-plant forcing regions ─────────────────────────────────────
-  for (let fi = 0; fi < numForcing; fi++) {
-    const seed = pickFreeCell(minForceSep);
-    if (!seed) return null;
-    addCell(fi, seed[0], seed[1]);
-    seeds.push(seed);
+  // ── Phase 1A: Corner-strip regions (k ≤ 2 only) ─────────────────────────────
+  // A straight strip of k+2 cells along one edge of a grid corner.
+  // Example for k=1: (0,0)→(0,1)→(0,2) — 3 cells; 1 star forced once a row/col used.
+  // Example for k=2: (0,0)→(0,1)→(0,2)→(0,3) — 4 cells; stars at (0,0)&(0,2) etc.
+  //
+  // WHY straight-line only: L-shaped corners with k+2 cells cannot hold k non-adjacent
+  // stars (every cell pair is within 8-directional reach), so placeStarsRowByRow fails.
+  // k=3 corner regions need ≥7 cells to hold 3 non-adjacent stars — too large to look
+  // like a "corner" — so we skip corners for k≥3 and use two edge strips instead.
+  if (k <= 2) {
+    const cornerTarget = k + 2; // straight strip of k+2 cells from corner
+    const cornerList   = shuffle<[number, number]>(
+      [[0, 0], [0, size - 1], [size - 1, 0], [size - 1, size - 1]], rng,
+    );
 
-    // Grow to forceMin–forceMax cells within maxRowSpanF rows.
-    // Growing stops at forceMax; if stuck before forceMin the region is still
-    // valid as long as rowSpan <= k (the confinement-based forcing criterion).
-    const target = forceMin + Math.floor(rng() * (forceMax - forceMin + 1));
-    while (regSize[fi] < target) {
-      const candidates: [number, number][] = [];
-      for (let r = 0; r < size; r++) {
-        for (let c = 0; c < size; c++) {
-          if (regions[r][c] !== fi) continue;
-          for (const [dr, dc] of DIRS4) {
-            const nr = r + dr, nc = c + dc;
-            if (nr < 0 || nr >= size || nc < 0 || nc >= size) continue;
-            if (regions[nr][nc] !== -1) continue;
-            if (Math.max(regMaxRow[fi], nr) - Math.min(regMinRow[fi], nr) + 1 > maxRowSpanF) continue;
-            candidates.push([nr, nc]);
-          }
-        }
+    for (let ci = 0; ci < 2; ci++) {
+      const [cr, cc] = cornerList[ci];
+      const reg = nextReg++;
+      addCell(reg, cr, cc);
+      seeds.push([cr, cc]);
+
+      // Grow in ONE direction only (horizontal or vertical) along the corner edge.
+      const horizontal = rng() < 0.5;
+      const dirR = horizontal ? 0 : (cr === 0 ? 1 : -1);
+      const dirC = horizontal ? (cc === 0 ? 1 : -1) : 0;
+
+      for (let step = 1; step < cornerTarget; step++) {
+        const nr = cr + dirR * step;
+        const nc = cc + dirC * step;
+        if (nr < 0 || nr >= size || nc < 0 || nc >= size) break;
+        if (regions[nr][nc] !== -1) break; // blocked by another region
+        addCell(reg, nr, nc);
       }
-      if (candidates.length === 0) break;
-      addCell(fi, ...candidates[Math.floor(rng() * candidates.length)]);
+      if (regSize[reg] < k + 1) return null; // not enough room for k stars
     }
   }
 
-  // ── Phase 2: spread seeds for remaining regions ─────────────────────────────
+  // ── Phase 1B: Edge-strip region(s) ───────────────────────────────────────────
+  // A strip confined to exactly k adjacent rows (or k cols) along a grid edge.
+  // rowSpan = k  ⟹  the confinement rule fires immediately (those k rows are "used").
+  //
+  // k ≤ 2: 1 strip (complements the 2 corner regions).
+  // k = 3: 2 strips (replaces corners entirely — one row-strip, one col-strip).
+  //        Two strips give the player two immediate logical footholds on hard puzzles.
+  const numEdgeStrips = k >= 3 ? 2 : 1;
+  const edgeChoices   = shuffle<'top' | 'bottom' | 'left' | 'right'>(
+    ['top', 'bottom', 'left', 'right'], rng,
+  );
+
+  for (let si = 0; si < numEdgeStrips; si++) {
+    const edgeReg = nextReg++;
+    const edge    = edgeChoices[si];
+    const minW = k + 2; // free-dimension width: enough for k non-adjacent stars + gaps
+    const maxW = k + 4;
+    const w    = minW + Math.floor(rng() * (maxW - minW + 1));
+
+    if (edge === 'top' || edge === 'bottom') {
+      const rowStart = edge === 'top' ? 0 : size - k;
+      const maxCS = size - w;
+      if (maxCS < 0) return null;
+      const cStart = Math.floor(rng() * (maxCS + 1));
+      for (let r = rowStart; r < rowStart + k; r++)
+        for (let c = cStart; c < cStart + w; c++)
+          if (r >= 0 && r < size && c >= 0 && c < size && regions[r][c] === -1)
+            addCell(edgeReg, r, c);
+      seeds.push([rowStart + Math.floor(k / 2), cStart + Math.floor(w / 2)]);
+    } else {
+      const colStart = edge === 'left' ? 0 : size - k;
+      const maxRS = size - w;
+      if (maxRS < 0) return null;
+      const rStart = Math.floor(rng() * (maxRS + 1));
+      for (let r = rStart; r < rStart + w; r++)
+        for (let c = colStart; c < colStart + k; c++)
+          if (r >= 0 && r < size && c >= 0 && c < size && regions[r][c] === -1)
+            addCell(edgeReg, r, c);
+      seeds.push([rStart + Math.floor(w / 2), colStart + Math.floor(k / 2)]);
+    }
+    if (regSize[edgeReg] < k + 1) return null; // too few cells
+  }
+
+  const numForcing = nextReg; // forcing regions: indices 0..numForcing-1
+
+  // ── Phase 2: spread seeds for remaining regions ────────────────────────────
   for (let reg = numForcing; reg < n; reg++) {
     const seed = pickFreeCell(minSeedSep);
     if (!seed) return null;
@@ -144,13 +184,11 @@ function growRegions(size: number, k: number, rng: () => number): number[][] | n
     seeds.push(seed);
   }
 
-  // ── Phase 3: unbiased Voronoi expansion (organic irregular shapes) ──────────
-  // Regions grow by pure random frontier selection — no balance bias — so shapes
-  // develop irregular arms and protrusions rather than compact rounded blobs.
+  // ── Phase 3: unbiased Voronoi expansion (organic irregular shapes) ───────────
+  // Only non-forcing regions grow — forcing regions keep their planted shape.
   const MAXROWSPAN = k + 2;
   const MAXCOLSPAN = Math.ceil(size / k);
 
-  // Build initial frontiers from all currently-assigned cells
   const frontiers: [number, number][][] = Array.from({ length: n }, () => []);
   for (let reg = 0; reg < n; reg++) {
     for (let r = 0; r < size; r++) {
@@ -171,11 +209,9 @@ function growRegions(size: number, k: number, rng: () => number): number[][] | n
       if (regions[r][c] !== -1) assigned++;
   const total = size * size;
 
-  // Reusable order array (avoid allocating inside hot loop)
   const orderBuf = Array.from({ length: n - numForcing }, (_, i) => i + numForcing);
 
   while (assigned < total) {
-    // Only expand non-forcing regions
     shuffle(orderBuf, rng);
     let anyExpanded = false;
 
@@ -208,17 +244,25 @@ function growRegions(size: number, k: number, rng: () => number): number[][] | n
     if (!anyExpanded) break;
   }
 
-  // ── Phase 4: flood-fill orphaned cells ───────────────────────────────────────
-  // Multi-pass: prefer non-forcing neighbours; fall back to any neighbour.
-  // Forcing regions are never expanded in the first pass; only as last resort.
+  // ── Phase 4: flood-fill orphaned cells ────────────────────────────────────────
+  // CRITICAL: never expand a forcing region in a way that destroys its property.
+  // A forcing region remains forcing as long as any one of these holds:
+  //   size ≤ k+2  |  rowSpan ≤ k  |  colSpan ≤ k
+  function canAddToForcing(reg: number, nr: number, nc: number): boolean {
+    const newRowSpan = Math.max(regMaxRow[reg], nr) - Math.min(regMinRow[reg], nr) + 1;
+    const newColSpan = Math.max(regMaxCol[reg], nc) - Math.min(regMinCol[reg], nc) + 1;
+    const newSize    = regSize[reg] + 1;
+    return newSize <= k + 2 || newRowSpan <= k || newColSpan <= k;
+  }
+
   let changed = true;
   while (changed) {
     changed = false;
     for (let r = 0; r < size; r++) {
       for (let c = 0; c < size; c++) {
         if (regions[r][c] !== -1) continue;
-        // First, prefer a non-forcing neighbour (preserves forcing shapes)
         let bestReg = -1, bestSize = Infinity;
+        // First preference: non-forcing neighbour (never harms forcing shapes)
         for (const [dr, dc] of DIRS4) {
           const nr = r + dr, nc = c + dc;
           if (nr < 0 || nr >= size || nc < 0 || nc >= size) continue;
@@ -226,19 +270,20 @@ function growRegions(size: number, k: number, rng: () => number): number[][] | n
           if (reg >= numForcing && regSize[reg] < bestSize) { bestReg = reg; bestSize = regSize[reg]; }
         }
         if (bestReg === -1) {
-          // All neighbours are forcing or edge — fall back to smallest forcing neighbour
+          // Only forcing neighbours available; add only if property is preserved
           for (const [dr, dc] of DIRS4) {
             const nr = r + dr, nc = c + dc;
             if (nr < 0 || nr >= size || nc < 0 || nc >= size) continue;
             const reg = regions[nr][nc];
-            if (reg >= 0 && regSize[reg] < bestSize) { bestReg = reg; bestSize = regSize[reg]; }
+            if (reg >= 0 && reg < numForcing && regSize[reg] < bestSize && canAddToForcing(reg, r, c))
+              { bestReg = reg; bestSize = regSize[reg]; }
           }
         }
         if (bestReg !== -1) { addCell(bestReg, r, c); changed = true; }
       }
     }
   }
-  // Absolute last resort: BFS outward for any remaining unassigned cells
+  // BFS last resort for isolated orphans (all neighbours would destroy forcing props)
   for (let r = 0; r < size; r++) {
     for (let c = 0; c < size; c++) {
       if (regions[r][c] !== -1) continue;
@@ -253,11 +298,40 @@ function growRegions(size: number, k: number, rng: () => number): number[][] | n
           const key = nr * size + nc;
           if (vis.has(key)) continue;
           vis.add(key);
-          if (regions[nr][nc] >= 0) { addCell(regions[nr][nc], r, c); found = true; break; }
-          q.push([nr, nc]);
+          // Prefer non-forcing; allow forcing only if property preserved
+          const reg = regions[nr][nc];
+          if (reg >= numForcing) { addCell(reg, r, c); found = true; break; }
+          if (reg >= 0 && canAddToForcing(reg, r, c)) { addCell(reg, r, c); found = true; break; }
+          if (reg === -1) q.push([nr, nc]);
+        }
+      }
+      // Absolute last resort — assign to nearest region regardless of forcing impact
+      if (!found) {
+        const q2: [number, number][] = [[r, c]];
+        const vis2 = new Set<number>([r * size + c]);
+        while (q2.length && !found) {
+          const [qr, qc] = q2.shift()!;
+          for (const [dr, dc] of DIRS4) {
+            const nr = qr + dr, nc = qc + dc;
+            if (nr < 0 || nr >= size || nc < 0 || nc >= size) continue;
+            const key = nr * size + nc;
+            if (vis2.has(key)) continue;
+            vis2.add(key);
+            if (regions[nr][nc] >= 0) { addCell(regions[nr][nc], r, c); found = true; break; }
+            q2.push([nr, nc]);
+          }
         }
       }
     }
+  }
+
+  // ── Post-validate: forcing regions must still be forcing ──────────────────────
+  // If Phase 4 had to expand a forcing region beyond its property, discard this
+  // attempt entirely rather than return a puzzle with no obvious starting moves.
+  for (let reg = 0; reg < numForcing; reg++) {
+    const rowSpan = regMaxRow[reg] - regMinRow[reg] + 1;
+    const colSpan = regMaxCol[reg] - regMinCol[reg] + 1;
+    if (regSize[reg] > k + 2 && rowSpan > k && colSpan > k) return null;
   }
 
   return regions;
@@ -863,25 +937,26 @@ export function _debugSolve(size: number, k: number, regions: number[][]): {
 
 // ── Pre-computed fallback puzzles ─────────────────────────────────────────────
 // Used when random generation fails to find a logically-unique puzzle.
-// Each fallback is a valid Star Battle puzzle (k stars per row/col/region,
-// no two stars adjacent). They may not be logically unique without hints.
+// Fallback puzzles: pre-computed valid puzzles with corner/edge forcing regions.
+// Used when generation exhausts its attempt budget. All have ≥2 forcing-shape regions
+// and logically solvable solutions.
 
 const FALLBACK_EASY: StarBattlePuzzle = {
   size: 8, starsPerUnit: 1,
-  regions: [[0,0,0,0,0,0,0,0],[0,0,0,0,3,3,3,0],[6,3,3,3,3,3,3,0],[6,6,3,3,3,4,4,4],[6,6,6,6,4,4,2,2],[5,5,5,4,4,2,2,2],[5,5,5,1,1,2,2,7],[5,5,5,1,1,7,7,7]],
-  solution: [[false,false,true,false,false,false,false,false],[false,false,false,false,true,false,false,false],[true,false,false,false,false,false,false,false],[false,false,false,false,false,true,false,false],[false,false,false,false,false,false,false,true],[false,true,false,false,false,false,false,false],[false,false,false,true,false,false,false,false],[false,false,false,false,false,false,true,false]],
+  regions: [[4,4,4,4,4,1,1,1],[4,4,4,4,4,4,4,4],[2,4,4,4,4,4,4,4],[2,5,5,5,5,5,5,5],[2,5,5,5,3,7,7,7],[2,5,5,5,3,3,7,7],[2,3,3,3,3,6,7,7],[0,0,0,6,6,6,6,6]],
+  solution: [[false,false,false,false,false,false,true,false],[false,false,false,true,false,false,false,false],[true,false,false,false,false,false,false,false],[false,false,true,false,false,false,false,false],[false,false,false,false,true,false,false,false],[false,false,false,false,false,false,false,true],[false,false,false,false,false,true,false,false],[false,true,false,false,false,false,false,false]],
 };
 
 const FALLBACK_MEDIUM: StarBattlePuzzle = {
   size: 10, starsPerUnit: 2,
-  regions: [[3,3,3,1,1,1,0,0,0,0],[3,3,1,1,1,1,0,0,0,0],[3,1,1,1,1,0,0,0,4,4],[3,1,1,1,7,0,7,0,4,4],[3,3,7,7,7,7,7,4,4,4],[2,2,7,7,7,7,4,4,8,8],[2,2,7,7,7,5,9,8,8,8],[2,2,2,5,5,5,9,8,8,8],[2,2,2,6,6,5,9,9,8,9],[2,2,6,6,6,5,5,9,9,9]],
-  solution: [[false,false,false,false,false,true,false,false,true,false],[false,true,false,true,false,false,false,false,false,false],[false,false,false,false,false,false,true,false,true,false],[true,false,false,false,true,false,false,false,false,false],[false,false,true,false,false,false,false,true,false,false],[true,false,false,false,false,false,false,false,false,true],[false,false,false,false,false,true,false,true,false,false],[false,true,false,true,false,false,false,false,false,false],[false,false,false,false,false,false,true,false,false,true],[false,false,true,false,true,false,false,false,false,false]],
+  regions: [[3,2,2,2,2,2,0,0,0,0],[3,3,2,2,2,2,2,2,2,9],[3,3,6,6,6,6,6,9,9,9],[3,3,3,6,3,6,6,6,9,9],[3,3,3,3,3,6,6,4,9,9],[3,3,3,5,3,4,4,4,4,4],[5,5,5,5,3,8,4,4,4,4],[5,5,5,5,8,8,8,8,4,7],[5,5,5,5,8,8,7,7,7,7],[1,1,1,1,8,8,7,7,7,7]],
+  solution: [[false,false,false,false,false,false,true,false,true,false],[false,false,true,false,true,false,false,false,false,false],[true,false,false,false,false,false,false,false,true,false],[false,false,false,true,false,true,false,false,false,false],[false,false,false,false,false,false,false,true,false,true],[false,true,false,true,false,false,false,false,false,false],[false,false,false,false,false,true,false,true,false,false],[false,true,false,false,false,false,false,false,false,true],[false,false,false,false,true,false,true,false,false,false],[true,false,true,false,false,false,false,false,false,false]],
 };
 
 const FALLBACK_HARD: StarBattlePuzzle = {
   size: 14, starsPerUnit: 3,
-  regions: [[10,10,10,10,4,4,4,9,9,9,2,2,2,2],[10,10,10,10,4,4,4,9,9,9,2,2,2,2],[10,10,4,4,4,4,9,9,0,9,2,2,2,2],[10,10,7,7,4,9,9,0,0,2,2,2,2,2],[10,10,10,7,7,9,0,0,0,0,2,2,3,3],[5,5,5,7,7,7,7,0,0,0,0,3,3,12],[5,5,5,5,7,7,7,0,0,0,3,3,12,12],[1,5,5,5,7,7,11,11,11,3,3,12,12,12],[1,1,5,5,5,7,11,11,11,3,12,12,12,12],[1,1,1,1,5,8,8,8,11,11,12,12,6,6],[1,13,13,1,1,8,8,11,11,11,11,6,6,6],[13,13,13,8,8,8,8,11,11,11,11,6,6,6],[13,13,13,13,13,8,8,8,11,6,6,6,6,6],[13,13,13,13,13,8,8,8,8,6,6,6,6,6]],
-  solution: [[true,false,false,false,true,false,false,false,true,false,false,false,false,false],[false,false,false,false,false,false,true,false,false,false,false,true,false,true],[false,true,false,true,false,false,false,false,false,true,false,false,false,false],[false,false,false,false,false,true,false,true,false,false,false,true,false,false],[false,true,false,true,false,false,false,false,false,false,false,false,false,true],[false,false,false,false,false,true,false,false,false,true,false,true,false,false],[false,true,false,false,false,false,false,true,false,false,false,false,false,true],[false,false,false,true,false,true,false,false,false,true,false,false,false,false],[true,false,false,false,false,false,false,true,false,false,false,false,true,false],[false,false,true,false,true,false,false,false,false,false,true,false,false,false],[true,false,false,false,false,false,true,false,false,false,false,false,true,false],[false,false,true,false,false,false,false,false,true,false,true,false,false,false],[false,false,false,false,true,false,true,false,false,false,false,false,true,false],[false,false,true,false,false,false,false,false,true,false,true,false,false,false]],
+  regions: [[13,13,13,13,13,2,2,2,3,5,5,5,5,5],[13,13,13,2,13,2,2,2,3,3,3,5,5,5],[1,1,1,2,2,2,2,3,3,3,3,5,5,5],[1,1,1,2,2,2,2,2,4,3,3,3,5,5],[1,1,1,2,4,4,4,4,4,3,3,0,0,0],[1,1,1,4,4,4,4,4,10,10,3,0,0,0],[1,1,1,7,6,4,4,10,10,8,8,0,0,0],[1,1,1,7,6,4,10,10,10,8,8,0,0,0],[1,1,1,7,6,6,6,10,10,8,8,0,0,0],[7,7,7,7,6,6,6,6,6,8,8,0,0,0],[11,11,7,7,7,12,12,6,6,8,8,8,8,8],[11,11,7,7,7,12,12,12,12,9,9,9,9,9],[11,11,11,11,12,12,12,12,12,9,9,9,9,9],[11,11,11,11,11,12,12,12,12,9,9,9,9,9]],
+  solution: [[true,false,false,false,false,false,false,false,false,false,true,false,true,false],[false,false,true,false,true,false,false,true,false,false,false,false,false,false],[true,false,false,false,false,false,false,false,false,true,false,false,false,true],[false,false,false,true,false,true,false,false,false,false,false,true,false,false],[false,false,false,false,false,false,false,true,false,true,false,false,false,true],[false,true,false,true,false,true,false,false,false,false,false,false,false,false],[false,false,false,false,false,false,false,false,true,false,true,false,true,false],[false,false,true,false,true,false,true,false,false,false,false,false,false,false],[false,false,false,false,false,false,false,false,true,false,true,false,true,false],[true,false,true,false,false,false,true,false,false,false,false,false,false,false],[false,false,false,false,true,false,false,false,true,false,false,true,false,false],[false,true,false,false,false,false,true,false,false,false,false,false,false,true],[false,false,false,true,false,false,false,false,false,true,false,true,false,false],[false,true,false,false,false,true,false,true,false,false,false,false,false,false]],
 };
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -894,26 +969,23 @@ export function generateStarBattle(difficulty: string, seed: string): StarBattle
     default:     size = 10; k = 2; break;
   }
 
-  const maxAttempts = difficulty === 'easy' ? 1200 : difficulty === 'medium' ? 2000 : 1500;
+  // Generation attempt limits — each attempt is fast, so we can afford many.
+  // If no puzzle found within the budget, the fallback is returned.
+  const maxAttempts = difficulty === 'easy' ? 2000 : difficulty === 'medium' ? 3000 : 1500;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const rng = mulberry32(strToSeed(`${seed}:${difficulty}:${attempt}`));
 
-    let regions: number[][] | null = null;
-    let solution: boolean[][] | null = null;
-
-    regions = growRegions(size, k, rng);
+    // Step 1: grow regions with forced corner + edge-strip shapes
+    const regions = growRegions(size, k, rng);
     if (!regions) continue;
+    if (countForcingRegions(size, k, regions) < 2) continue; // sanity check
 
-    // Require at least 2 forcing-shape regions so players have an obvious start
-    if (countForcingRegions(size, k, regions) < 2) continue;
-
-    solution = placeStarsRowByRow(size, k, regions, rng);
+    // Step 2: place stars
+    const solution = placeStarsRowByRow(size, k, regions, rng);
     if (!solution) continue;
 
-    if (!regions || !solution) continue;
-
-    // Sanity-check solution
+    // Sanity-check star counts
     const rowC = new Array(size).fill(0);
     const colC = new Array(size).fill(0);
     const regC = new Array(size).fill(0);
@@ -922,24 +994,29 @@ export function generateStarBattle(difficulty: string, seed: string): StarBattle
         if (solution[r][c]) { rowC[r]++; colC[c]++; regC[regions[r][c]]++; }
     if (!rowC.every(v => v === k) || !colC.every(v => v === k) || !regC.every(v => v === k)) continue;
 
-    // Hard mode: pre-place ~24% of stars as locked hints (8–10 of 42).
-    // Easy/medium: clean empty grid — player places everything themselves.
+    // Step 3+4: logical solvability gate.
+    // Hard: pre-place ~24% of stars as locked hints shown to the player.
+    // Easy/medium: no hints; the corner+edge forcing regions must carry the solve.
     if (difficulty === 'hard') {
-      const numHints = Math.round(size * k * 0.24); // ~10 for 14×14×3
-      const hints = pickHints(size, solution, numHints, rng);
+      const numHints = Math.round(size * k * 0.33); // ~14 of 42 stars (needed for solver to succeed)
+      const hints    = pickHints(size, solution, numHints, rng);
       const { solved } = logicalSolve(size, k, regions, hints);
       if (!solved) continue;
       return { size, starsPerUnit: k, regions, solution, hints };
+    } else {
+      const { solved } = logicalSolve(size, k, regions);
+      if (!solved) continue;
+      return { size, starsPerUnit: k, regions, solution };
     }
-
-    return { size, starsPerUnit: k, regions, solution };
   }
 
-  // Pre-computed valid fallbacks
+  // ── Fallback ──────────────────────────────────────────────────────────────────
+  // Pre-computed valid puzzles used when generation times out.
+  // Hard fallback gets dynamically assigned hints from its solution.
   const fb = difficulty === 'hard' ? FALLBACK_HARD : difficulty === 'medium' ? FALLBACK_MEDIUM : FALLBACK_EASY;
   if (difficulty === 'hard') {
     const rng = mulberry32(strToSeed(`${seed}:${difficulty}:fallback`));
-    const numHints = Math.round(fb.size * fb.starsPerUnit * 0.24);
+    const numHints = Math.round(fb.size * fb.starsPerUnit * 0.33);
     const hints = pickHints(fb.size, fb.solution, numHints, rng);
     return { ...fb, hints };
   }
