@@ -148,7 +148,7 @@ export function startGame(code: string, userId: string): { success: boolean; err
     const gauntletPuzzles: GauntletPuzzles = {
       starBattle: generateStarBattle(room.difficulty, `${seed}-sb`) as import('../types/index').StarBattlePuzzle,
       wordle: generateWordle(room.difficulty, `${seed}-w`) as import('../types/index').WordlePuzzle,
-      connections: generateConnections(room.difficulty, `${seed}-c`) as import('../types/index').ConnectionsPuzzle,
+      connections: generateConnections(room.difficulty, `${seed}-c`, code) as import('../types/index').ConnectionsPuzzle,
     };
     room.gauntletPuzzles = gauntletPuzzles;
     room.puzzle = gauntletPuzzles.starBattle; // first puzzle shown
@@ -177,7 +177,7 @@ export function startGame(code: string, userId: string): { success: boolean; err
     switch (room.puzzleType) {
       case 'wordle':      room.puzzle = generateWordle(room.difficulty, seed); break;
       case 'star-battle': room.puzzle = generateStarBattle(room.difficulty, seed); break;
-      case 'connections': room.puzzle = generateConnections(room.difficulty, seed); break;
+      case 'connections': room.puzzle = generateConnections(room.difficulty, seed, code); break;
     }
 
     for (const player of activePlayers) {

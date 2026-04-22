@@ -347,7 +347,7 @@ export function registerGameHandlers(io: Server, socket: Socket) {
         attempt: (gauntletState.retries[phase] ?? 0) + 1,
       });
     } else if (phase === 'connections') {
-      const newPuzzle = generateConnections(room.difficulty, seed) as ConnectionsPuzzle;
+      const newPuzzle = generateConnections(room.difficulty, seed, roomCode) as ConnectionsPuzzle;
       gauntletState.currentConnectionsPuzzle = newPuzzle;
       gauntletState.connectionsState = { solvedCategories: [], selectedWords: [], mistakes: 0, solved: false };
       gauntletState.awaitingRetry = false;
