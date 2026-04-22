@@ -60,6 +60,13 @@ export default function LiveSidebar({ room, userId, onLeave, onForceReset }: Pro
 
   const isGauntlet = room.gameMode === 'gauntlet';
 
+  // In Star Battle (classic or gauntlet phase), hide the local player's own
+  // progress — they can see their board directly and it spoils nothing about
+  // opponents.
+  const isStarBattleActive =
+    (room.puzzleType === 'star-battle' && !isGauntlet) ||
+    (isGauntlet && Object.values(room.players).find(p => p.userId === userId)?.gauntletPhase === 'star-battle');
+
   const players = Object.values(room.players)
     .filter(p => !p.isSpectator)
     .sort((a, b) => {
@@ -103,11 +110,14 @@ export default function LiveSidebar({ room, userId, onLeave, onForceReset }: Pro
                         {player.username}
                         {player.userId === userId && ' (you)'}
                       </span>
-                      <span className="text-xs text-gray-500 shrink-0 ml-1">
-                        {player.status === 'finished'
-                          ? player.finishTime != null ? `✓ ${formatTime(player.finishTime)}` : '✓'
-                          : `${player.progress}%`}
-                      </span>
+                      {/* Hide own progress in Star Battle — player can see their own board */}
+                      {!(isStarBattleActive && player.userId === userId && player.status !== 'finished') && (
+                        <span className="text-xs text-gray-500 shrink-0 ml-1">
+                          {player.status === 'finished'
+                            ? player.finishTime != null ? `✓ ${formatTime(player.finishTime)}` : '✓'
+                            : `${player.progress}%`}
+                        </span>
+                      )}
                     </div>
                     {isGauntlet && (
                       <div className="mt-0.5">
@@ -116,7 +126,8 @@ export default function LiveSidebar({ room, userId, onLeave, onForceReset }: Pro
                     )}
                   </div>
                 </div>
-                {/* Progress bar */}
+                {/* Progress bar — hidden for own row in Star Battle */}
+                {!(isStarBattleActive && player.userId === userId && player.status !== 'finished') && (
                 <div className="ml-6 h-1.5 bg-dark-600 rounded-full overflow-hidden">
                   <div
                     className={`h-full rounded-full transition-all duration-500 ${
@@ -125,6 +136,7 @@ export default function LiveSidebar({ room, userId, onLeave, onForceReset }: Pro
                     style={{ width: `${player.progress}%` }}
                   />
                 </div>
+                )}
               </div>
             ))}
           </div>
