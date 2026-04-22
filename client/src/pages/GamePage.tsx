@@ -3,7 +3,10 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useSocket } from '../context/SocketContext';
 import { motion, AnimatePresence } from 'framer-motion';
-import type { RoomState, GameResult, PuzzleType, Difficulty, GauntletPhase, GauntletPlayerState } from '../types';
+import type {
+  RoomState, GameResult, PuzzleType, Difficulty,
+  GauntletPhase, GauntletPlayerState, WordlePuzzle, ConnectionsPuzzle,
+} from '../types';
 import RoomLobby from '../components/multiplayer/RoomLobby';
 import LiveSidebar from '../components/multiplayer/LiveSidebar';
 import ResultsScreen from '../components/multiplayer/ResultsScreen';
@@ -25,6 +28,22 @@ const PHASE_ICONS: Record<GauntletPhase, string> = {
   connections: '🔗',
 };
 
+function formatPenalty(ms: number): string {
+  return `+${Math.round(ms / 1000)}s`;
+}
+
+interface GauntletFailedInfo {
+  phase: GauntletPhase;
+  attempt: number;       // which attempt is coming up (2 = first retry)
+  penaltyMs: number;
+  totalPenaltyMs: number;
+}
+
+interface GauntletRetryPuzzles {
+  wordle?: WordlePuzzle;
+  connections?: ConnectionsPuzzle;
+}
+
 export default function GamePage() {
   const { code } = useParams<{ code: string }>();
   const { user } = useAuth();
@@ -39,11 +58,14 @@ export default function GamePage() {
   // Gauntlet local state
   const [gauntletPhase, setGauntletPhase] = useState<GauntletPhase | 'done' | null>(null);
   const [phaseTransition, setPhaseTransition] = useState<GauntletPhase | null>(null);
+  const [gauntletFailed, setGauntletFailed] = useState<GauntletFailedInfo | null>(null);
+  const [gauntletRetryPuzzles, setGauntletRetryPuzzles] = useState<GauntletRetryPuzzles>({});
+  // Key to force remount puzzle component after retry
+  const [retryKey, setRetryKey] = useState(0);
 
   const roomRef = useRef<RoomState | null>(null);
   useEffect(() => { roomRef.current = room; }, [room]);
 
-  // Track reconnect so we know when a recovery has happened
   const wasReconnectingRef = useRef(false);
 
   // ── Session persistence helpers ──────────────────────────────────────────────
@@ -60,7 +82,6 @@ export default function GamePage() {
     } catch { /* ignore malformed JSON */ }
   }, [socket, code, user]);
 
-  // After a reconnect fires, immediately attempt to rejoin the room
   useEffect(() => {
     if (reconnecting) { wasReconnectingRef.current = true; return; }
     if (connected && wasReconnectingRef.current) {
@@ -69,7 +90,6 @@ export default function GamePage() {
     }
   }, [connected, reconnecting, tryRejoin]);
 
-  // On first mount try rejoin (handles the page-refresh case)
   const didMountRejoin = useRef(false);
   useEffect(() => {
     if (!socket || !code || !user || !connected || didMountRejoin.current) return;
@@ -115,7 +135,7 @@ export default function GamePage() {
       tick();
     };
 
-    const handleGameStarted  = (r: RoomState) => {
+    const handleGameStarted = (r: RoomState) => {
       setRoom(r);
       setCountdown(null);
       if (r.gameMode === 'gauntlet') {
@@ -146,15 +166,18 @@ export default function GamePage() {
       setCountdown(null);
       setGauntletPhase(null);
       setPhaseTransition(null);
+      setGauntletFailed(null);
+      setGauntletRetryPuzzles({});
+      setRetryKey(0);
       setRoom(r);
     };
 
     const handleGauntletAdvance = ({ phase }: { phase: GauntletPhase | 'done' }) => {
+      setGauntletFailed(null);
       if (phase === 'done') {
         setGauntletPhase('done');
         return;
       }
-      // Show transition overlay for 2s then switch phase
       setPhaseTransition(phase);
       setTimeout(() => {
         setGauntletPhase(phase);
@@ -162,30 +185,54 @@ export default function GamePage() {
       }, 2000);
     };
 
-    socket.on('room:updated',      handleRoomUpdated);
-    socket.on('room:joined',       handleRoomJoined);
-    socket.on('room:created',      handleRoomJoined);
-    socket.on('room:rejoined',     handleRoomRejoined);
-    socket.on('game:countdown',    handleCountdown);
-    socket.on('game:started',      handleGameStarted);
-    socket.on('game:finished',     handleGameFinished);
-    socket.on('game:progress',     handleProgress);
-    socket.on('room:error',        handleError);
-    socket.on('room:reset',        handleReset);
-    socket.on('gauntlet:advance',  handleGauntletAdvance);
+    const handleGauntletFailed = (info: GauntletFailedInfo) => {
+      setGauntletFailed(info);
+    };
+
+    const handleGauntletRetryReady = ({
+      phase,
+      puzzle,
+    }: {
+      phase: GauntletPhase;
+      puzzle: WordlePuzzle | ConnectionsPuzzle;
+      attempt: number;
+    }) => {
+      setGauntletRetryPuzzles(prev => ({
+        ...prev,
+        [phase === 'wordle' ? 'wordle' : 'connections']: puzzle,
+      }));
+      setGauntletFailed(null);
+      setRetryKey(k => k + 1);
+    };
+
+    socket.on('room:updated',          handleRoomUpdated);
+    socket.on('room:joined',           handleRoomJoined);
+    socket.on('room:created',          handleRoomJoined);
+    socket.on('room:rejoined',         handleRoomRejoined);
+    socket.on('game:countdown',        handleCountdown);
+    socket.on('game:started',          handleGameStarted);
+    socket.on('game:finished',         handleGameFinished);
+    socket.on('game:progress',         handleProgress);
+    socket.on('room:error',            handleError);
+    socket.on('room:reset',            handleReset);
+    socket.on('gauntlet:advance',      handleGauntletAdvance);
+    socket.on('gauntlet:failed',       handleGauntletFailed);
+    socket.on('gauntlet:retry-ready',  handleGauntletRetryReady);
 
     return () => {
-      socket.off('room:updated',      handleRoomUpdated);
-      socket.off('room:joined',       handleRoomJoined);
-      socket.off('room:created',      handleRoomJoined);
-      socket.off('room:rejoined',     handleRoomRejoined);
-      socket.off('game:countdown',    handleCountdown);
-      socket.off('game:started',      handleGameStarted);
-      socket.off('game:finished',     handleGameFinished);
-      socket.off('game:progress',     handleProgress);
-      socket.off('room:error',        handleError);
-      socket.off('room:reset',        handleReset);
-      socket.off('gauntlet:advance',  handleGauntletAdvance);
+      socket.off('room:updated',          handleRoomUpdated);
+      socket.off('room:joined',           handleRoomJoined);
+      socket.off('room:created',          handleRoomJoined);
+      socket.off('room:rejoined',         handleRoomRejoined);
+      socket.off('game:countdown',        handleCountdown);
+      socket.off('game:started',          handleGameStarted);
+      socket.off('game:finished',         handleGameFinished);
+      socket.off('game:progress',         handleProgress);
+      socket.off('room:error',            handleError);
+      socket.off('room:reset',            handleReset);
+      socket.off('gauntlet:advance',      handleGauntletAdvance);
+      socket.off('gauntlet:failed',       handleGauntletFailed);
+      socket.off('gauntlet:retry-ready',  handleGauntletRetryReady);
     };
   }, [socket, code, user, navigate]);
 
@@ -208,8 +255,16 @@ export default function GamePage() {
     socket?.emit('room:force-reset', { roomCode: room?.code, userId: user?.id });
   }, [socket, room?.code, user?.id]);
 
+  const handleRetryRequest = useCallback((phase: GauntletPhase) => {
+    socket?.emit('gauntlet:retry-request', { roomCode: room?.code, userId: user?.id, phase });
+  }, [socket, room?.code, user?.id]);
+
   // ── Gauntlet: build a patched room for the current phase ─────────────────────
-  function buildGauntletPatchedRoom(r: RoomState, phase: GauntletPhase): RoomState | null {
+  function buildGauntletPatchedRoom(
+    r: RoomState,
+    phase: GauntletPhase,
+    retryPuzzles: GauntletRetryPuzzles
+  ): RoomState | null {
     if (!r.gauntletPuzzles) return null;
 
     const phaseToType: Record<GauntletPhase, PuzzleType> = {
@@ -217,10 +272,12 @@ export default function GamePage() {
       wordle: 'wordle',
       connections: 'connections',
     };
+
+    // Use retry puzzle if available, otherwise the shared gauntlet puzzle
     const phasePuzzle =
       phase === 'star-battle' ? r.gauntletPuzzles.starBattle :
-      phase === 'wordle'      ? r.gauntletPuzzles.wordle :
-                                r.gauntletPuzzles.connections;
+      phase === 'wordle'      ? (retryPuzzles.wordle ?? r.gauntletPuzzles.wordle) :
+                                (retryPuzzles.connections ?? r.gauntletPuzzles.connections);
 
     // Extract phase-specific player states from GauntletPlayerState
     const patchedPlayerStates: RoomState['playerStates'] = {};
@@ -283,13 +340,11 @@ export default function GamePage() {
   const isSpectator = myPlayer?.isSpectator ?? true;
   const isGauntlet  = room?.gameMode === 'gauntlet';
 
-  // For gauntlet: patch the room to match the current phase
   const activePhase = gauntletPhase && gauntletPhase !== 'done' ? gauntletPhase : null;
   const patchedRoom = (isGauntlet && room && activePhase)
-    ? buildGauntletPatchedRoom(room, activePhase)
+    ? buildGauntletPatchedRoom(room, activePhase, gauntletRetryPuzzles)
     : null;
 
-  // Choose the room to render puzzles from (patched for gauntlet, original for classic)
   const renderRoom = patchedRoom ?? room;
 
   return (
@@ -353,6 +408,61 @@ export default function GamePage() {
         )}
       </AnimatePresence>
 
+      {/* Gauntlet retry overlay */}
+      <AnimatePresence>
+        {gauntletFailed && (
+          <motion.div
+            key="retry-overlay"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-dark-900/95 flex flex-col items-center justify-center z-50 gap-5"
+          >
+            <motion.div
+              initial={{ scale: 0.5, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              className="text-6xl"
+            >
+              💀
+            </motion.div>
+            <motion.div
+              initial={{ y: 20, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              transition={{ delay: 0.15 }}
+              className="text-center space-y-1"
+            >
+              <p className="text-2xl font-bold text-white">
+                {PHASE_ICONS[gauntletFailed.phase]} {PHASE_LABELS[gauntletFailed.phase]} failed
+              </p>
+              <p className="text-red-400 font-semibold text-lg">
+                {formatPenalty(gauntletFailed.penaltyMs)} time penalty
+              </p>
+              {gauntletFailed.totalPenaltyMs > gauntletFailed.penaltyMs && (
+                <p className="text-gray-500 text-sm">
+                  Total penalty: {formatPenalty(gauntletFailed.totalPenaltyMs)}
+                </p>
+              )}
+            </motion.div>
+            <motion.div
+              initial={{ y: 20, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              transition={{ delay: 0.3 }}
+              className="text-center space-y-2"
+            >
+              <p className="text-gray-400 text-sm">
+                Attempt {gauntletFailed.attempt} — a new puzzle is waiting
+              </p>
+              <button
+                onClick={() => handleRetryRequest(gauntletFailed.phase)}
+                className="btn-primary px-8 py-3 text-base font-bold"
+              >
+                Try Again
+              </button>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <div className="flex gap-6 flex-col lg:flex-row">
         <div className="flex-1 min-w-0">
           {room?.status === 'waiting' && (
@@ -386,13 +496,13 @@ export default function GamePage() {
               )}
 
               {renderRoom.puzzleType === 'wordle' && renderRoom.puzzle && (
-                <WordleGame room={renderRoom} userId={user!.id} socket={socket!} isSpectator={isSpectator} />
+                <WordleGame key={`wordle-${retryKey}`} room={renderRoom} userId={user!.id} socket={socket!} isSpectator={isSpectator} />
               )}
               {renderRoom.puzzleType === 'star-battle' && renderRoom.puzzle && (
                 <StarBattleGame room={renderRoom} userId={user!.id} socket={socket!} isSpectator={isSpectator} />
               )}
               {renderRoom.puzzleType === 'connections' && renderRoom.puzzle && (
-                <ConnectionsGame room={renderRoom} userId={user!.id} socket={socket!} isSpectator={isSpectator} />
+                <ConnectionsGame key={`connections-${retryKey}`} room={renderRoom} userId={user!.id} socket={socket!} isSpectator={isSpectator} />
               )}
             </>
           )}

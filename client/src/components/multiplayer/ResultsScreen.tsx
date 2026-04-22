@@ -92,18 +92,31 @@ export default function ResultsScreen({ results, room, userId, onPlayAgain, onLe
                   </div>
                 </div>
 
-                {/* Gauntlet: per-puzzle time breakdown */}
+                {/* Gauntlet: per-puzzle time breakdown + retries/penalty */}
                 {isGauntlet && r.gauntletPhaseTimes && (
-                  <div className="mt-2 ml-10 flex gap-3">
-                    {GAUNTLET_PHASES.map(ph => {
-                      const t = r.gauntletPhaseTimes?.[ph];
-                      return (
-                        <div key={ph} className="text-xs text-gray-500">
-                          <span className="mr-1">{PUZZLE_ICONS[ph]}</span>
-                          <span className="font-mono">{t ? formatTime(t) : '—'}</span>
-                        </div>
-                      );
-                    })}
+                  <div className="mt-2 ml-10 space-y-1">
+                    <div className="flex gap-3">
+                      {GAUNTLET_PHASES.map(ph => {
+                        const t = r.gauntletPhaseTimes?.[ph];
+                        const retries = r.gauntletRetries?.[ph] ?? 0;
+                        return (
+                          <div key={ph} className="text-xs text-gray-500">
+                            <span className="mr-1">{PUZZLE_ICONS[ph]}</span>
+                            <span className="font-mono">{t ? formatTime(t) : '—'}</span>
+                            {retries > 0 && (
+                              <span className="ml-1 text-red-400">
+                                ({retries}× retry)
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {(r.gauntletPenaltyMs ?? 0) > 0 && (
+                      <div className="text-xs text-red-400/80">
+                        +{Math.round((r.gauntletPenaltyMs ?? 0) / 1000)}s total penalty
+                      </div>
+                    )}
                   </div>
                 )}
               </motion.div>

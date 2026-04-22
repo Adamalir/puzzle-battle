@@ -6,14 +6,18 @@ import type {
   GauntletPlayerState, GauntletPhase,
 } from '../../types/index';
 import {
-  getRoom, getPlayer, getPlayerState, setPlayerState, updatePlayer,
+  getRoom, getPlayerState, setPlayerState, updatePlayer,
   checkAllFinished, finishRoom, getRoomPublicView,
 } from '../../services/roomService';
+import { generateWordle } from '../../services/puzzleService/wordle';
+import { generateConnections } from '../../services/puzzleService/connections';
 import { evaluateGuess, isValidWord, checkWordleSolved, calcWordleProgress } from '../../services/puzzleService/wordle';
 import { checkStarBattleSolved, calcStarBattleProgress } from '../../services/puzzleService/starBattle';
 import { checkConnectionsGuess, calcConnectionsProgress } from '../../services/puzzleService/connections';
 
 const GAUNTLET_PHASES: GauntletPhase[] = ['star-battle', 'wordle', 'connections'];
+const GAUNTLET_PENALTY_MS = 60_000;
+const GAUNTLET_MAX_MISTAKES = 4;
 
 function getElapsed(roomCode: string): number {
   const room = getRoom(roomCode);
@@ -26,8 +30,8 @@ function broadcastProgress(io: Server, roomCode: string) {
   io.to(roomCode).emit('game:progress', getRoomPublicView(room));
 }
 
-function handleFinish(io: Server, socket: Socket, roomCode: string, userId: string) {
-  const elapsed = getElapsed(roomCode);
+function handleFinish(io: Server, socket: Socket, roomCode: string, userId: string, overrideFinishTime?: number) {
+  const elapsed = overrideFinishTime ?? getElapsed(roomCode);
   updatePlayer(roomCode, userId, { status: 'finished', finishTime: elapsed });
   broadcastProgress(io, roomCode);
 
@@ -69,18 +73,45 @@ function handleGauntletPhaseComplete(
     broadcastProgress(io, roomCode);
     socket.emit('gauntlet:advance', { phase: nextPhase });
   } else {
-    // All 3 phases done
+    // All 3 phases done — compute total time including penalties
     gauntletState.phase = 'done';
+    const totalPenaltyMs = (Object.values(gauntletState.penaltyMs) as number[]).reduce((a, b) => a + b, 0);
+    const finalTime = elapsed + totalPenaltyMs;
+
     setPlayerState(roomCode, userId, gauntletState);
     updatePlayer(roomCode, userId, {
       gauntletPhase: 'done',
       gauntletPhaseTimes: { ...gauntletState.phaseTimes },
+      gauntletRetries: { ...gauntletState.retries },
+      gauntletPenaltyMs: totalPenaltyMs,
       progress: 100,
     });
     broadcastProgress(io, roomCode);
     socket.emit('gauntlet:advance', { phase: 'done' });
-    handleFinish(io, socket, roomCode, userId);
+    handleFinish(io, socket, roomCode, userId, finalTime);
   }
+}
+
+// Gauntlet: player failed a phase — register the failure and wait for retry request
+function handleGauntletPhaseFailed(
+  socket: Socket,
+  roomCode: string,
+  userId: string,
+  phase: GauntletPhase,
+  gauntletState: GauntletPlayerState
+) {
+  gauntletState.retries[phase] = (gauntletState.retries[phase] ?? 0) + 1;
+  gauntletState.penaltyMs[phase] = (gauntletState.penaltyMs[phase] ?? 0) + GAUNTLET_PENALTY_MS;
+  gauntletState.awaitingRetry = true;
+  setPlayerState(roomCode, userId, gauntletState);
+
+  const attempt = gauntletState.retries[phase]! + 1; // attempt number player is about to be on
+  socket.emit('gauntlet:failed', {
+    phase,
+    attempt,
+    penaltyMs: GAUNTLET_PENALTY_MS,
+    totalPenaltyMs: gauntletState.penaltyMs[phase],
+  });
 }
 
 export function registerGameHandlers(io: Server, socket: Socket) {
@@ -95,8 +126,9 @@ export function registerGameHandlers(io: Server, socket: Socket) {
     if (room.gameMode === 'gauntlet') {
       const gauntletState = getPlayerState(roomCode, userId) as GauntletPlayerState;
       if (!gauntletState || gauntletState.phase !== 'wordle') return;
+      if (gauntletState.awaitingRetry) return;
 
-      const puzzle = room.gauntletPuzzles!.wordle;
+      const puzzle = gauntletState.currentWordlePuzzle ?? room.gauntletPuzzles!.wordle;
       const state = gauntletState.wordleState;
       if (state.solved || state.failed) return;
 
@@ -115,7 +147,6 @@ export function registerGameHandlers(io: Server, socket: Socket) {
       state.currentGuess = '';
 
       const phaseProgress = calcWordleProgress(state.guesses, puzzle.maxGuesses, solved);
-      // Gauntlet progress: phase 2 of 3 = 33–66%
       const progress = Math.floor(33 + phaseProgress * 0.33);
       updatePlayer(roomCode, userId, { progress });
       setPlayerState(roomCode, userId, gauntletState);
@@ -123,8 +154,10 @@ export function registerGameHandlers(io: Server, socket: Socket) {
       socket.emit('wordle:guess-result', { guess: upper, result, solved, failed, state });
       broadcastProgress(io, roomCode);
 
-      if (solved || failed) {
+      if (solved) {
         handleGauntletPhaseComplete(io, socket, roomCode, userId, 'wordle', gauntletState);
+      } else if (failed) {
+        handleGauntletPhaseFailed(socket, roomCode, userId, 'wordle', gauntletState);
       }
       return;
     }
@@ -152,9 +185,7 @@ export function registerGameHandlers(io: Server, socket: Socket) {
     updatePlayer(roomCode, userId, { progress });
     setPlayerState(roomCode, userId, state);
 
-    // Send full guess result to the guesser
     socket.emit('wordle:guess-result', { guess: upper, result, solved, failed, state });
-    // Broadcast progress to room (without revealing answer in other players' states)
     broadcastProgress(io, roomCode);
 
     if (solved || failed) {
@@ -184,7 +215,6 @@ export function registerGameHandlers(io: Server, socket: Socket) {
       state.solved = solved;
 
       const phaseProgress = calcStarBattleProgress(state.grid, puzzle);
-      // Gauntlet progress: phase 1 of 3 = 0–33%
       const progress = Math.floor(phaseProgress * 0.33);
       updatePlayer(roomCode, userId, { progress });
       setPlayerState(roomCode, userId, gauntletState);
@@ -203,7 +233,6 @@ export function registerGameHandlers(io: Server, socket: Socket) {
     const state = getPlayerState(roomCode, userId) as StarBattlePlayerState;
     if (!state || state.solved) return;
 
-    // Prevent changing pre-revealed hint cells
     if (puzzle.hints?.[row]?.[col]) return;
 
     state.grid[row][col] = value;
@@ -230,8 +259,9 @@ export function registerGameHandlers(io: Server, socket: Socket) {
     if (room.gameMode === 'gauntlet') {
       const gauntletState = getPlayerState(roomCode, userId) as GauntletPlayerState;
       if (!gauntletState || gauntletState.phase !== 'connections') return;
+      if (gauntletState.awaitingRetry) return;
 
-      const puzzle = room.gauntletPuzzles!.connections;
+      const puzzle = gauntletState.currentConnectionsPuzzle ?? room.gauntletPuzzles!.connections;
       const state = gauntletState.connectionsState;
       if (state.solved) return;
 
@@ -242,7 +272,6 @@ export function registerGameHandlers(io: Server, socket: Socket) {
         state.solved = solved;
 
         const phaseProgress = calcConnectionsProgress(state.solvedCategories, puzzle.categories.length);
-        // Gauntlet progress: phase 3 of 3 = 66–99%
         const progress = Math.floor(66 + phaseProgress * 0.33);
         updatePlayer(roomCode, userId, { progress });
         setPlayerState(roomCode, userId, gauntletState);
@@ -257,6 +286,10 @@ export function registerGameHandlers(io: Server, socket: Socket) {
         state.mistakes++;
         setPlayerState(roomCode, userId, gauntletState);
         socket.emit('connections:wrong', { state });
+
+        if (state.mistakes >= GAUNTLET_MAX_MISTAKES) {
+          handleGauntletPhaseFailed(socket, roomCode, userId, 'connections', gauntletState);
+        }
       }
       return;
     }
@@ -285,5 +318,49 @@ export function registerGameHandlers(io: Server, socket: Socket) {
       setPlayerState(roomCode, userId, state);
       socket.emit('connections:wrong', { state });
     }
+  });
+
+  // ── Gauntlet: retry request ───────────────────────────────────────────────
+  socket.on('gauntlet:retry-request', (payload: { roomCode: string; userId: string; phase: GauntletPhase }) => {
+    const { roomCode, userId, phase } = payload;
+    const room = getRoom(roomCode);
+    if (!room || room.status !== 'active' || room.gameMode !== 'gauntlet') return;
+
+    const gauntletState = getPlayerState(roomCode, userId) as GauntletPlayerState;
+    if (!gauntletState || gauntletState.phase !== phase || !gauntletState.awaitingRetry) return;
+
+    const seed = `${roomCode}-retry-${userId}-${Date.now()}`;
+
+    if (phase === 'wordle') {
+      const newPuzzle = generateWordle(room.difficulty, seed) as WordlePuzzle;
+      gauntletState.currentWordlePuzzle = newPuzzle;
+      gauntletState.wordleState = { guesses: [], currentGuess: '', solved: false, failed: false };
+      gauntletState.awaitingRetry = false;
+      setPlayerState(roomCode, userId, gauntletState);
+
+      // Send sanitized puzzle (no answer)
+      const { answer: _a, ...safePuzzle } = newPuzzle;
+      socket.emit('gauntlet:retry-ready', {
+        phase,
+        puzzle: safePuzzle,
+        state: gauntletState.wordleState,
+        attempt: (gauntletState.retries[phase] ?? 0) + 1,
+      });
+    } else if (phase === 'connections') {
+      const newPuzzle = generateConnections(room.difficulty, seed) as ConnectionsPuzzle;
+      gauntletState.currentConnectionsPuzzle = newPuzzle;
+      gauntletState.connectionsState = { solvedCategories: [], selectedWords: [], mistakes: 0, solved: false };
+      gauntletState.awaitingRetry = false;
+      setPlayerState(roomCode, userId, gauntletState);
+
+      socket.emit('gauntlet:retry-ready', {
+        phase,
+        puzzle: newPuzzle,
+        state: gauntletState.connectionsState,
+        attempt: (gauntletState.retries[phase] ?? 0) + 1,
+      });
+    }
+
+    broadcastProgress(io, roomCode);
   });
 }

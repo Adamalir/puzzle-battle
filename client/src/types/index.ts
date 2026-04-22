@@ -24,6 +24,8 @@ export interface Player {
   isGuest: boolean;
   gauntletPhase?: GauntletPhase | 'done';
   gauntletPhaseTimes?: Partial<Record<GauntletPhase, number>>;
+  gauntletRetries?: Partial<Record<GauntletPhase, number>>;
+  gauntletPenaltyMs?: number;
 }
 
 // ── Puzzle state types (received from server) ─────────────────────────────────
@@ -94,6 +96,9 @@ export interface GauntletPlayerState {
   starBattleState: StarBattlePlayerState;
   wordleState: WordlePlayerState;
   connectionsState: ConnectionsPlayerState;
+  retries: Partial<Record<GauntletPhase, number>>;
+  penaltyMs: Partial<Record<GauntletPhase, number>>;
+  awaitingRetry?: boolean;
 }
 
 // ── Room ──────────────────────────────────────────────────────────────────────
@@ -122,4 +127,6 @@ export interface GameResult {
   placement: number;
   progress: number;
   gauntletPhaseTimes?: Partial<Record<GauntletPhase, number>>;
+  gauntletRetries?: Partial<Record<GauntletPhase, number>>;
+  gauntletPenaltyMs?: number;
 }

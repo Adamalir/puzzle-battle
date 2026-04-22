@@ -22,6 +22,8 @@ export interface Player {
   isGuest: boolean;
   gauntletPhase?: GauntletPhase | 'done';
   gauntletPhaseTimes?: Partial<Record<GauntletPhase, number>>;
+  gauntletRetries?: Partial<Record<GauntletPhase, number>>;
+  gauntletPenaltyMs?: number;
 }
 
 // ── Wordle ────────────────────────────────────────────────────────────────────
@@ -96,6 +98,14 @@ export interface GauntletPlayerState {
   starBattleState: StarBattlePlayerState;
   wordleState: WordlePlayerState;
   connectionsState: ConnectionsPlayerState;
+  // Retry tracking (gauntlet-only)
+  retries: Partial<Record<GauntletPhase, number>>;
+  penaltyMs: Partial<Record<GauntletPhase, number>>;
+  // Per-player override puzzles for retries (replaces shared gauntletPuzzles for that phase)
+  currentWordlePuzzle?: WordlePuzzle;
+  currentConnectionsPuzzle?: ConnectionsPuzzle;
+  // Whether the player is currently waiting for a retry (failed, hasn't clicked Try Again yet)
+  awaitingRetry?: boolean;
 }
 
 // ── Room ──────────────────────────────────────────────────────────────────────

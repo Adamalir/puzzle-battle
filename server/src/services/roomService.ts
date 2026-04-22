@@ -166,6 +166,8 @@ export function startGame(code: string, userId: string): { success: boolean; err
         starBattleState: { grid: sbGrid, solved: false },
         wordleState: { guesses: [], currentGuess: '', solved: false, failed: false },
         connectionsState: { solvedCategories: [], selectedWords: [], mistakes: 0, solved: false },
+        retries: {},
+        penaltyMs: {},
       };
       room.playerStates.set(player.userId, gauntletState);
       player.status = 'playing';
