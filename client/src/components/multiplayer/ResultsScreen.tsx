@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
-import type { GameResult, RoomState, PuzzleType, Difficulty } from '../../types';
+import type { GameResult, RoomState, PuzzleType, Difficulty, GauntletPhase } from '../../types';
 
 interface Props {
   results: GameResult[];
@@ -18,6 +18,12 @@ const PUZZLE_OPTIONS: { type: PuzzleType; label: string }[] = [
   { type: 'connections', label: 'Connections' },
 ];
 const DIFFICULTIES: Difficulty[] = ['easy', 'medium', 'hard'];
+const GAUNTLET_PHASES: GauntletPhase[] = ['star-battle', 'wordle', 'connections'];
+const PHASE_LABELS: Record<GauntletPhase, string> = {
+  'star-battle': 'Star Battle',
+  wordle: 'Wordle',
+  connections: 'Connections',
+};
 
 function formatTime(ms?: number): string {
   if (!ms) return 'DNF';
@@ -29,6 +35,7 @@ function formatTime(ms?: number): string {
 export default function ResultsScreen({ results, room, userId, onPlayAgain, onLeave }: Props) {
   const winner = results[0];
   const isHost = room.hostId === userId;
+  const isGauntlet = room.gameMode === 'gauntlet';
 
   const [showNewGame, setShowNewGame] = useState(false);
   const [newPuzzle,   setNewPuzzle]   = useState<PuzzleType>(room.puzzleType);
@@ -43,11 +50,16 @@ export default function ResultsScreen({ results, room, userId, onPlayAgain, onLe
       >
         {/* Winner banner */}
         <div className="text-center mb-8">
-          <div className="text-6xl mb-3">🏆</div>
+          <div className="text-6xl mb-3">{isGauntlet ? '⚡' : '🏆'}</div>
           <h1 className="text-3xl font-extrabold mb-1">{winner?.username} wins!</h1>
           <p className="text-gray-400">
-            {PUZZLE_ICONS[room.puzzleType]} {room.puzzleType.replace('-', ' ')} · {room.difficulty}
+            {isGauntlet
+              ? `Puzzle Gauntlet · ${room.difficulty}`
+              : `${PUZZLE_ICONS[room.puzzleType]} ${room.puzzleType.replace('-', ' ')} · ${room.difficulty}`}
           </p>
+          {isGauntlet && (
+            <p className="text-xs text-yellow-400/70 mt-1">⭐ Star Battle → 🔤 Wordle → 🔗 Connections</p>
+          )}
         </div>
 
         {/* Leaderboard */}
@@ -60,21 +72,40 @@ export default function ResultsScreen({ results, room, userId, onPlayAgain, onLe
                 initial={{ opacity: 0, x: -20 }}
                 animate={{ opacity: 1, x: 0 }}
                 transition={{ delay: i * 0.1 }}
-                className={`flex items-center gap-4 p-3 rounded-xl ${
+                className={`p-3 rounded-xl ${
                   i === 0 ? 'bg-yellow-500/10 border border-yellow-500/30' : 'bg-dark-700'
                 }`}
               >
-                <span className="text-2xl w-8 text-center">{MEDALS[i] ?? `${i + 1}`}</span>
-                <div className="flex-1">
-                  <div className="font-semibold">{r.username}</div>
-                  <div className="text-sm text-gray-400">
-                    {r.finishTime ? `Finished in ${formatTime(r.finishTime)}` : 'Did not finish'}
+                <div className="flex items-center gap-4">
+                  <span className="text-2xl w-8 text-center">{MEDALS[i] ?? `${i + 1}`}</span>
+                  <div className="flex-1">
+                    <div className="font-semibold">{r.username}</div>
+                    <div className="text-sm text-gray-400">
+                      {r.finishTime ? `Finished in ${formatTime(r.finishTime)}` : 'Did not finish'}
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-sm font-mono text-brand-400">{formatTime(r.finishTime)}</div>
+                    {!isGauntlet && (
+                      <div className="text-xs text-gray-500">{r.progress}% complete</div>
+                    )}
                   </div>
                 </div>
-                <div className="text-right">
-                  <div className="text-sm font-mono text-brand-400">{formatTime(r.finishTime)}</div>
-                  <div className="text-xs text-gray-500">{r.progress}% complete</div>
-                </div>
+
+                {/* Gauntlet: per-puzzle time breakdown */}
+                {isGauntlet && r.gauntletPhaseTimes && (
+                  <div className="mt-2 ml-10 flex gap-3">
+                    {GAUNTLET_PHASES.map(ph => {
+                      const t = r.gauntletPhaseTimes?.[ph];
+                      return (
+                        <div key={ph} className="text-xs text-gray-500">
+                          <span className="mr-1">{PUZZLE_ICONS[ph]}</span>
+                          <span className="font-mono">{t ? formatTime(t) : '—'}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </motion.div>
             ))}
           </div>
@@ -89,24 +120,26 @@ export default function ResultsScreen({ results, room, userId, onPlayAgain, onLe
           >
             <h3 className="font-semibold text-gray-200">Choose next game</h3>
 
-            <div>
-              <p className="text-xs text-gray-500 mb-2 uppercase tracking-wide">Puzzle</p>
-              <div className="flex gap-2">
-                {PUZZLE_OPTIONS.map(p => (
-                  <button
-                    key={p.type}
-                    onClick={() => setNewPuzzle(p.type)}
-                    className={`flex-1 py-2 rounded-lg text-sm font-medium border transition-all ${
-                      newPuzzle === p.type
-                        ? 'border-brand-500 bg-brand-500/10 text-brand-300'
-                        : 'border-dark-500 bg-dark-700 text-gray-400 hover:border-dark-400'
-                    }`}
-                  >
-                    {PUZZLE_ICONS[p.type]} {p.label}
-                  </button>
-                ))}
+            {!isGauntlet && (
+              <div>
+                <p className="text-xs text-gray-500 mb-2 uppercase tracking-wide">Puzzle</p>
+                <div className="flex gap-2">
+                  {PUZZLE_OPTIONS.map(p => (
+                    <button
+                      key={p.type}
+                      onClick={() => setNewPuzzle(p.type)}
+                      className={`flex-1 py-2 rounded-lg text-sm font-medium border transition-all ${
+                        newPuzzle === p.type
+                          ? 'border-brand-500 bg-brand-500/10 text-brand-300'
+                          : 'border-dark-500 bg-dark-700 text-gray-400 hover:border-dark-400'
+                      }`}
+                    >
+                      {PUZZLE_ICONS[p.type]} {p.label}
+                    </button>
+                  ))}
+                </div>
               </div>
-            </div>
+            )}
 
             <div>
               <p className="text-xs text-gray-500 mb-2 uppercase tracking-wide">Difficulty</p>

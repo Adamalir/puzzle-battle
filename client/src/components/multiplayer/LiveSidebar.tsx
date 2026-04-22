@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { RoomState } from '../../types';
+import type { RoomState, GauntletPhase } from '../../types';
 
 interface Props {
   room: RoomState;
@@ -14,6 +14,39 @@ function formatTime(ms: number): string {
   return `${m}:${String(s % 60).padStart(2, '0')}`;
 }
 
+const GAUNTLET_PHASES: GauntletPhase[] = ['star-battle', 'wordle', 'connections'];
+
+const PHASE_ICONS: Record<GauntletPhase, string> = {
+  'star-battle': '⭐',
+  wordle: '🔤',
+  connections: '🔗',
+};
+
+function GauntletPhaseIndicator({ phase }: { phase: GauntletPhase | 'done' | undefined }) {
+  return (
+    <div className="flex items-center gap-1 text-xs">
+      {GAUNTLET_PHASES.map((ph, i) => {
+        const phaseOrder: GauntletPhase[] = ['star-battle', 'wordle', 'connections'];
+        const currentIdx = phase && phase !== 'done' ? phaseOrder.indexOf(phase) : 3;
+        const thisIdx = phaseOrder.indexOf(ph);
+        const isDone = phase === 'done' || thisIdx < currentIdx;
+        const isCurrent = ph === phase;
+        return (
+          <span key={ph} className={`transition-all ${
+            isCurrent ? 'opacity-100' :
+            isDone    ? 'opacity-40' :
+                        'opacity-20'
+          }`}>
+            {i > 0 && <span className="text-gray-600 mx-0.5">›</span>}
+            {PHASE_ICONS[ph]}
+          </span>
+        );
+      })}
+      {phase === 'done' && <span className="text-green-400 ml-1">✓</span>}
+    </div>
+  );
+}
+
 export default function LiveSidebar({ room, userId, onLeave, onForceReset }: Props) {
   const [elapsed, setElapsed] = useState(0);
 
@@ -24,6 +57,8 @@ export default function LiveSidebar({ room, userId, onLeave, onForceReset }: Pro
     }, 500);
     return () => clearInterval(interval);
   }, [room.startTime]);
+
+  const isGauntlet = room.gameMode === 'gauntlet';
 
   const players = Object.values(room.players)
     .filter(p => !p.isSpectator)
@@ -41,8 +76,16 @@ export default function LiveSidebar({ room, userId, onLeave, onForceReset }: Pro
         {/* Timer */}
         <div className="text-center">
           <div className="text-3xl font-mono font-bold text-brand-400">{formatTime(elapsed)}</div>
-          <div className="text-xs text-gray-500 mt-0.5">Elapsed</div>
+          <div className="text-xs text-gray-500 mt-0.5">
+            {isGauntlet ? 'Total time' : 'Elapsed'}
+          </div>
         </div>
+
+        {isGauntlet && (
+          <div className="text-center">
+            <p className="text-xs text-yellow-400/80 font-medium">⚡ Puzzle Gauntlet</p>
+          </div>
+        )}
 
         <div className="border-t border-dark-600" />
 
@@ -51,7 +94,7 @@ export default function LiveSidebar({ room, userId, onLeave, onForceReset }: Pro
           <h3 className="text-sm font-semibold text-gray-400 mb-3">Players</h3>
           <div className="space-y-3">
             {players.map((player, idx) => (
-              <div key={player.userId} className={`${player.userId === userId ? 'ring-1 ring-brand-500 rounded-lg' : ''}`}>
+              <div key={player.userId} className={`${player.userId === userId ? 'ring-1 ring-brand-500 rounded-lg p-1' : ''}`}>
                 <div className="flex items-center gap-2 mb-1">
                   <span className="text-xs text-gray-500 w-4 shrink-0">{idx + 1}</span>
                   <div className="flex-1 min-w-0">
@@ -66,6 +109,11 @@ export default function LiveSidebar({ room, userId, onLeave, onForceReset }: Pro
                           : `${player.progress}%`}
                       </span>
                     </div>
+                    {isGauntlet && (
+                      <div className="mt-0.5">
+                        <GauntletPhaseIndicator phase={player.gauntletPhase} />
+                      </div>
+                    )}
                   </div>
                 </div>
                 {/* Progress bar */}

@@ -32,6 +32,8 @@ export default function RoomLobby({ room, userId, socket, onLeave, onForceReset 
     wordle: '🔤', 'star-battle': '⭐', connections: '🔗',
   };
 
+  const isGauntlet = room.gameMode === 'gauntlet';
+
   return (
     <div className="max-w-lg mx-auto">
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
@@ -40,11 +42,20 @@ export default function RoomLobby({ room, userId, socket, onLeave, onForceReset 
           <div className="flex items-center justify-between mb-4">
             <div>
               <div className="flex items-center gap-2 mb-1">
-                <span className="text-2xl">{PUZZLE_ICONS[room.puzzleType]}</span>
+                {isGauntlet ? (
+                  <span className="text-2xl">⚡</span>
+                ) : (
+                  <span className="text-2xl">{PUZZLE_ICONS[room.puzzleType]}</span>
+                )}
                 <h2 className="text-xl font-bold capitalize">
-                  {room.puzzleType.replace('-', ' ')} · {room.difficulty}
+                  {isGauntlet
+                    ? `Puzzle Gauntlet · ${room.difficulty}`
+                    : `${room.puzzleType.replace('-', ' ')} · ${room.difficulty}`}
                 </h2>
               </div>
+              {isGauntlet && (
+                <p className="text-xs text-yellow-400/70 mb-1">⭐ Star Battle → 🔤 Wordle → 🔗 Connections</p>
+              )}
               <p className="text-gray-400 text-sm">Waiting for players…</p>
             </div>
             <div className="text-right">

@@ -1,7 +1,8 @@
 import { nanoid } from 'nanoid';
 import type {
-  Room, Player, PuzzleType, Difficulty,
+  Room, Player, PuzzleType, Difficulty, GameMode,
   WordlePlayerState, StarBattlePlayerState, ConnectionsPlayerState,
+  GauntletPlayerState, GauntletPuzzles,
 } from '../types/index';
 import { generateWordle } from './puzzleService/wordle';
 import { generateStarBattle } from './puzzleService/starBattle';
@@ -14,7 +15,8 @@ export function createRoom(
   username: string,
   puzzleType: PuzzleType,
   difficulty: Difficulty,
-  isGuest: boolean
+  isGuest: boolean,
+  gameMode: GameMode = 'classic'
 ): Room {
   const code = nanoid(6).toUpperCase();
   const host: Player = {
@@ -40,6 +42,7 @@ export function createRoom(
     startTime: null,
     countdownEnd: null,
     gameId: null,
+    gameMode,
     playerStates: new Map(),
   };
   rooms.set(code, room);
@@ -141,15 +144,44 @@ export function startGame(code: string, userId: string): { success: boolean; err
 
   const seed = `${code}-${Date.now()}`;
 
-  switch (room.puzzleType) {
-    case 'wordle':      room.puzzle = generateWordle(room.difficulty, seed); break;
-    case 'star-battle': room.puzzle = generateStarBattle(room.difficulty, seed); break;
-    case 'connections': room.puzzle = generateConnections(room.difficulty, seed); break;
-  }
+  if (room.gameMode === 'gauntlet') {
+    const gauntletPuzzles: GauntletPuzzles = {
+      starBattle: generateStarBattle(room.difficulty, `${seed}-sb`) as import('../types/index').StarBattlePuzzle,
+      wordle: generateWordle(room.difficulty, `${seed}-w`) as import('../types/index').WordlePuzzle,
+      connections: generateConnections(room.difficulty, `${seed}-c`) as import('../types/index').ConnectionsPuzzle,
+    };
+    room.gauntletPuzzles = gauntletPuzzles;
+    room.puzzle = gauntletPuzzles.starBattle; // first puzzle shown
 
-  for (const player of activePlayers) {
-    room.playerStates.set(player.userId, initPlayerState(room.puzzleType, room.puzzle));
-    player.status = 'playing';
+    for (const player of activePlayers) {
+      const sbPuzzle = gauntletPuzzles.starBattle;
+      const sbGrid = Array.from({ length: sbPuzzle.size }, (_, r) =>
+        Array.from({ length: sbPuzzle.size }, (_, c) =>
+          sbPuzzle.hints?.[r]?.[c] ? 1 : 0
+        )
+      );
+      const gauntletState: GauntletPlayerState = {
+        phase: 'star-battle',
+        phaseTimes: {},
+        starBattleState: { grid: sbGrid, solved: false },
+        wordleState: { guesses: [], currentGuess: '', solved: false, failed: false },
+        connectionsState: { solvedCategories: [], selectedWords: [], mistakes: 0, solved: false },
+      };
+      room.playerStates.set(player.userId, gauntletState);
+      player.status = 'playing';
+      player.gauntletPhase = 'star-battle';
+    }
+  } else {
+    switch (room.puzzleType) {
+      case 'wordle':      room.puzzle = generateWordle(room.difficulty, seed); break;
+      case 'star-battle': room.puzzle = generateStarBattle(room.difficulty, seed); break;
+      case 'connections': room.puzzle = generateConnections(room.difficulty, seed); break;
+    }
+
+    for (const player of activePlayers) {
+      room.playerStates.set(player.userId, initPlayerState(room.puzzleType, room.puzzle));
+      player.status = 'playing';
+    }
   }
 
   room.status = 'countdown';
@@ -183,6 +215,7 @@ export function resetRoom(
   room.countdownEnd = null;
   room.gameId = null;
   room.playerStates = new Map();
+  room.gauntletPuzzles = undefined;
   if (puzzleType) room.puzzleType = puzzleType;
   if (difficulty)  room.difficulty = difficulty;
 
@@ -190,6 +223,8 @@ export function resetRoom(
     player.status = 'waiting';
     player.progress = 0;
     delete player.finishTime;
+    delete player.gauntletPhase;
+    delete player.gauntletPhaseTimes;
   }
 
   return { success: true, room };
@@ -220,16 +255,28 @@ function initPlayerState(
 }
 
 export function getRoomPublicView(room: Room): object {
-  const { puzzle, puzzleType, ...rest } = room;
+  const { puzzle, puzzleType, gauntletPuzzles, ...rest } = room;
   let publicPuzzle: object | null = puzzle;
   if (puzzle && puzzleType === 'wordle') {
     const { answer, ...safeWordle } = puzzle as import('../types/index').WordlePuzzle;
     publicPuzzle = safeWordle;
   }
+
+  let publicGauntletPuzzles: object | undefined;
+  if (gauntletPuzzles) {
+    const { answer: _a, ...safeGauntletWordle } = gauntletPuzzles.wordle;
+    publicGauntletPuzzles = {
+      starBattle: gauntletPuzzles.starBattle,
+      wordle: safeGauntletWordle,
+      connections: gauntletPuzzles.connections,
+    };
+  }
+
   return {
     ...rest,
     puzzleType,
     puzzle: publicPuzzle,
+    gauntletPuzzles: publicGauntletPuzzles,
     players: Object.fromEntries(room.players),
     playerStates: Object.fromEntries(room.playerStates),
   };
@@ -239,7 +286,7 @@ export function getPlayerState(code: string, userId: string) {
   return rooms.get(code)?.playerStates.get(userId);
 }
 
-export function setPlayerState(code: string, userId: string, state: WordlePlayerState | StarBattlePlayerState | ConnectionsPlayerState) {
+export function setPlayerState(code: string, userId: string, state: WordlePlayerState | StarBattlePlayerState | ConnectionsPlayerState | GauntletPlayerState) {
   const room = rooms.get(code);
   if (!room) return;
   room.playerStates.set(userId, state);

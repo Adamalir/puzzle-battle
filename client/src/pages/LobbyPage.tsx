@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useSocket } from '../context/SocketContext';
 import { motion } from 'framer-motion';
-import type { PuzzleType, Difficulty } from '../types';
+import type { PuzzleType, Difficulty, GameMode } from '../types';
 
 const PUZZLE_OPTIONS: { type: PuzzleType; icon: string; label: string; desc: string }[] = [
   { type: 'wordle',      icon: '🔤', label: 'Wordle',      desc: 'Guess the 5-letter word' },
@@ -18,6 +18,7 @@ export default function LobbyPage() {
   const { socket, connected } = useSocket();
   const navigate = useNavigate();
 
+  const [gameMode, setGameMode] = useState<GameMode>('classic');
   const [puzzleType, setPuzzleType] = useState<PuzzleType>('wordle');
   const [difficulty, setDifficulty] = useState<Difficulty>('medium');
   const [joinCode, setJoinCode] = useState('');
@@ -30,7 +31,9 @@ export default function LobbyPage() {
     if (!socket || !user) return;
     setCreating(true); setError(null);
     socket.emit('room:create', {
-      puzzleType, difficulty,
+      puzzleType: gameMode === 'gauntlet' ? 'star-battle' : puzzleType,
+      difficulty,
+      gameMode,
       username: user.username, userId: user.id, isGuest: user.isGuest,
     });
     socket.once('room:created', (room) => {
@@ -86,28 +89,74 @@ export default function LobbyPage() {
           <div className="card space-y-5">
             <h2 className="text-xl font-semibold">Create Room</h2>
 
+            {/* Mode toggle */}
             <div>
-              <label className="block text-sm font-medium mb-2 text-gray-400">Puzzle</label>
+              <label className="block text-sm font-medium mb-2 text-gray-400">Mode</label>
               <div className="space-y-2">
-                {PUZZLE_OPTIONS.map((p) => (
-                  <button
-                    key={p.type}
-                    onClick={() => setPuzzleType(p.type)}
-                    className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border text-left transition-all ${
-                      puzzleType === p.type
-                        ? 'border-brand-500 bg-brand-500/10 text-white'
-                        : 'border-dark-500 bg-dark-700 text-gray-300 hover:border-dark-400'
-                    }`}
-                  >
-                    <span className="text-xl">{p.icon}</span>
-                    <span>
-                      <span className="font-medium block text-sm">{p.label}</span>
-                      <span className="text-xs text-gray-500">{p.desc}</span>
-                    </span>
-                  </button>
-                ))}
+                <button
+                  onClick={() => setGameMode('classic')}
+                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border text-left transition-all ${
+                    gameMode === 'classic'
+                      ? 'border-brand-500 bg-brand-500/10 text-white'
+                      : 'border-dark-500 bg-dark-700 text-gray-300 hover:border-dark-400'
+                  }`}
+                >
+                  <span className="text-xl">🎮</span>
+                  <span>
+                    <span className="font-medium block text-sm">Single Puzzle</span>
+                    <span className="text-xs text-gray-500">Pick one puzzle type to race on</span>
+                  </span>
+                </button>
+                <button
+                  onClick={() => setGameMode('gauntlet')}
+                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border text-left transition-all ${
+                    gameMode === 'gauntlet'
+                      ? 'border-yellow-500 bg-yellow-500/10 text-white'
+                      : 'border-dark-500 bg-dark-700 text-gray-300 hover:border-dark-400'
+                  }`}
+                >
+                  <span className="text-xl">⚡</span>
+                  <span>
+                    <span className="font-medium block text-sm">Puzzle Gauntlet</span>
+                    <span className="text-xs text-gray-500">Complete all 3 puzzles in sequence</span>
+                  </span>
+                </button>
               </div>
             </div>
+
+            {/* Puzzle type picker — only in classic mode */}
+            {gameMode === 'classic' && (
+              <div>
+                <label className="block text-sm font-medium mb-2 text-gray-400">Puzzle</label>
+                <div className="space-y-2">
+                  {PUZZLE_OPTIONS.map((p) => (
+                    <button
+                      key={p.type}
+                      onClick={() => setPuzzleType(p.type)}
+                      className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border text-left transition-all ${
+                        puzzleType === p.type
+                          ? 'border-brand-500 bg-brand-500/10 text-white'
+                          : 'border-dark-500 bg-dark-700 text-gray-300 hover:border-dark-400'
+                      }`}
+                    >
+                      <span className="text-xl">{p.icon}</span>
+                      <span>
+                        <span className="font-medium block text-sm">{p.label}</span>
+                        <span className="text-xs text-gray-500">{p.desc}</span>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Gauntlet info banner */}
+            {gameMode === 'gauntlet' && (
+              <div className="rounded-lg border border-yellow-500/30 bg-yellow-500/5 px-3 py-2.5 text-sm text-yellow-300">
+                <p className="font-medium mb-1">⭐ → 🔤 → 🔗</p>
+                <p className="text-xs text-yellow-400/70">Star Battle → Wordle → Connections</p>
+              </div>
+            )}
 
             <div>
               <label className="block text-sm font-medium mb-2 text-gray-400">Difficulty</label>

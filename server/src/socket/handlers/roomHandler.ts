@@ -17,7 +17,8 @@ export function registerRoomHandlers(io: Server, socket: Socket) {
   socket.on('room:create', (payload: CreateRoomPayload) => {
     const room = createRoom(
       payload.userId, payload.username,
-      payload.puzzleType, payload.difficulty, payload.isGuest
+      payload.puzzleType, payload.difficulty, payload.isGuest,
+      payload.gameMode ?? 'classic'
     );
     socket.join(room.code);
     socket.data.userId   = payload.userId;

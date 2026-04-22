@@ -2,6 +2,8 @@ export type PuzzleType = 'wordle' | 'star-battle' | 'connections';
 export type Difficulty = 'easy' | 'medium' | 'hard';
 export type GameStatus = 'waiting' | 'countdown' | 'active' | 'finished';
 export type PlayerStatus = 'waiting' | 'playing' | 'finished';
+export type GameMode = 'classic' | 'gauntlet';
+export type GauntletPhase = 'star-battle' | 'wordle' | 'connections';
 
 export interface AuthUser {
   id: string;
@@ -18,6 +20,8 @@ export interface Player {
   isSpectator: boolean;
   isHost: boolean;
   isGuest: boolean;
+  gauntletPhase?: GauntletPhase | 'done';
+  gauntletPhaseTimes?: Partial<Record<GauntletPhase, number>>;
 }
 
 // ── Wordle ────────────────────────────────────────────────────────────────────
@@ -78,6 +82,22 @@ export interface ConnectionsPlayerState {
   solved: boolean;
 }
 
+// ── Gauntlet ──────────────────────────────────────────────────────────────────
+
+export interface GauntletPuzzles {
+  starBattle: StarBattlePuzzle;
+  wordle: WordlePuzzle;
+  connections: ConnectionsPuzzle;
+}
+
+export interface GauntletPlayerState {
+  phase: GauntletPhase | 'done';
+  phaseTimes: Partial<Record<GauntletPhase, number>>;
+  starBattleState: StarBattlePlayerState;
+  wordleState: WordlePlayerState;
+  connectionsState: ConnectionsPlayerState;
+}
+
 // ── Room ──────────────────────────────────────────────────────────────────────
 
 export interface Room {
@@ -91,8 +111,10 @@ export interface Room {
   startTime: number | null;
   countdownEnd: number | null;
   gameId: string | null;
+  gameMode: GameMode;
+  gauntletPuzzles?: GauntletPuzzles;
   // per-player game state (keyed by userId)
-  playerStates: Map<string, WordlePlayerState | StarBattlePlayerState | ConnectionsPlayerState>;
+  playerStates: Map<string, WordlePlayerState | StarBattlePlayerState | ConnectionsPlayerState | GauntletPlayerState>;
 }
 
 // ── Socket event payloads ─────────────────────────────────────────────────────
@@ -103,6 +125,7 @@ export interface CreateRoomPayload {
   username: string;
   userId: string;
   isGuest: boolean;
+  gameMode?: GameMode;
 }
 
 export interface JoinRoomPayload {

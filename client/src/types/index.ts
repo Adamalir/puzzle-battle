@@ -3,6 +3,8 @@ export type Difficulty = 'easy' | 'medium' | 'hard';
 export type GameStatus = 'waiting' | 'countdown' | 'active' | 'finished';
 export type PlayerStatus = 'waiting' | 'playing' | 'finished';
 export type LetterState = 'correct' | 'present' | 'absent' | 'empty';
+export type GameMode = 'classic' | 'gauntlet';
+export type GauntletPhase = 'star-battle' | 'wordle' | 'connections';
 
 export interface AuthUser {
   id: string;
@@ -20,6 +22,8 @@ export interface Player {
   isSpectator: boolean;
   isHost: boolean;
   isGuest: boolean;
+  gauntletPhase?: GauntletPhase | 'done';
+  gauntletPhaseTimes?: Partial<Record<GauntletPhase, number>>;
 }
 
 // ── Puzzle state types (received from server) ─────────────────────────────────
@@ -76,6 +80,22 @@ export interface ConnectionsPuzzle {
   shuffledWords: string[];
 }
 
+// ── Gauntlet ──────────────────────────────────────────────────────────────────
+
+export interface GauntletPuzzles {
+  starBattle: StarBattlePuzzle;
+  wordle: WordlePuzzle;
+  connections: ConnectionsPuzzle;
+}
+
+export interface GauntletPlayerState {
+  phase: GauntletPhase | 'done';
+  phaseTimes: Partial<Record<GauntletPhase, number>>;
+  starBattleState: StarBattlePlayerState;
+  wordleState: WordlePlayerState;
+  connectionsState: ConnectionsPlayerState;
+}
+
 // ── Room ──────────────────────────────────────────────────────────────────────
 
 export interface RoomState {
@@ -84,8 +104,10 @@ export interface RoomState {
   puzzleType: PuzzleType;
   difficulty: Difficulty;
   status: GameStatus;
+  gameMode: GameMode;
+  gauntletPuzzles?: GauntletPuzzles;
   players: Record<string, Player>;
-  playerStates: Record<string, WordlePlayerState | StarBattlePlayerState | ConnectionsPlayerState>;
+  playerStates: Record<string, WordlePlayerState | StarBattlePlayerState | ConnectionsPlayerState | GauntletPlayerState>;
   puzzle: WordlePuzzle | StarBattlePuzzle | ConnectionsPuzzle | null;
   startTime: number | null;
   countdownEnd: number | null;
@@ -99,4 +121,5 @@ export interface GameResult {
   finishTime?: number;
   placement: number;
   progress: number;
+  gauntletPhaseTimes?: Partial<Record<GauntletPhase, number>>;
 }
