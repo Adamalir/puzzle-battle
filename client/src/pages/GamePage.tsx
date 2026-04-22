@@ -10,6 +10,7 @@ import type {
 import RoomLobby from '../components/multiplayer/RoomLobby';
 import LiveSidebar from '../components/multiplayer/LiveSidebar';
 import ResultsScreen from '../components/multiplayer/ResultsScreen';
+import GauntletSpectatorView from '../components/multiplayer/GauntletSpectatorView';
 import WordleGame from '../components/puzzles/Wordle/WordleGame';
 import StarBattleGame from '../components/puzzles/StarBattle/StarBattleGame';
 import ConnectionsGame from '../components/puzzles/Connections/ConnectionsGame';
@@ -62,6 +63,8 @@ export default function GamePage() {
   const [gauntletRetryPuzzles, setGauntletRetryPuzzles] = useState<GauntletRetryPuzzles>({});
   // Key to force remount puzzle component after retry
   const [retryKey, setRetryKey] = useState(0);
+  // Auto-spectate after finishing all 3 gauntlet puzzles while others still play
+  const [isAutoSpectating, setIsAutoSpectating] = useState(false);
 
   const roomRef = useRef<RoomState | null>(null);
   useEffect(() => { roomRef.current = room; }, [room]);
@@ -146,10 +149,26 @@ export default function GamePage() {
     const handleGameFinished = ({ results: res }: { results: GameResult[] }) => {
       const delay = roomRef.current?.gameMode === 'gauntlet' ? 0
         : roomRef.current?.puzzleType === 'wordle' ? 2200 : 0;
-      setTimeout(() => setResults(res), delay);
+      setTimeout(() => {
+        setIsAutoSpectating(false);
+        setResults(res);
+      }, delay);
     };
 
-    const handleProgress = (r: RoomState) => { setRoom(r); };
+    const handleProgress = (r: RoomState) => {
+      setRoom(r);
+      // If we finished all gauntlet phases and others are still going, stay in spectate mode
+      // (guards against rare race where gauntlet:advance fires before the progress broadcast)
+      if (r.gameMode === 'gauntlet') {
+        const me = r.players[user.id];
+        if (me?.gauntletPhase === 'done' && me.status === 'finished') {
+          const othersStillPlaying = Object.values(r.players).some(
+            p => !p.isSpectator && p.userId !== user.id && p.status !== 'finished'
+          );
+          if (othersStillPlaying) setIsAutoSpectating(true);
+        }
+      }
+    };
 
     const handleError = ({ message }: { message: string }) => {
       const rejoinErrors = ['Room not found', 'You are not in this room'];
@@ -169,6 +188,7 @@ export default function GamePage() {
       setGauntletFailed(null);
       setGauntletRetryPuzzles({});
       setRetryKey(0);
+      setIsAutoSpectating(false);
       setRoom(r);
     };
 
@@ -176,6 +196,14 @@ export default function GamePage() {
       setGauntletFailed(null);
       if (phase === 'done') {
         setGauntletPhase('done');
+        // Enter auto-spectate if other players are still active (not solo mode)
+        const currentRoom = roomRef.current;
+        if (currentRoom) {
+          const othersStillPlaying = Object.values(currentRoom.players).some(
+            p => !p.isSpectator && p.userId !== user?.id && p.status !== 'finished'
+          );
+          if (othersStillPlaying) setIsAutoSpectating(true);
+        }
         return;
       }
       setPhaseTransition(phase);
@@ -321,6 +349,17 @@ export default function GamePage() {
           <button onClick={() => navigate('/lobby')} className="btn-primary">Back to Lobby</button>
         </div>
       </div>
+    );
+  }
+
+  if (isAutoSpectating && room) {
+    return (
+      <GauntletSpectatorView
+        room={room}
+        userId={user!.id}
+        socket={socket!}
+        onLeave={handleLeave}
+      />
     );
   }
 
